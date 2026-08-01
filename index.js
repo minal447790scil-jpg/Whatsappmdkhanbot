@@ -1,4 +1,7 @@
 require('dotenv').config();
+const express = require("express");
+const app = express();
+const PORT = process.env.PORT || 3000;
 const fs = require('fs-extra');
 const path = require('path');
 const axios = require('axios');
@@ -1157,3 +1160,13 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Keep process alive
 setInterval(() => {}, 1000);
+app.get("/", (req, res) => {
+  res.send("Bot is running!");
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+
+
