@@ -23,7 +23,7 @@ const commands = {
     weather: require('./commands/weather'),
   //  today: require("./commands/today"),
   //  cherry: require('./commands/cherry'),
-    fikrandom: require('./commands/fikrandom'),
+    //fikrandom: require('./commands/fikrandom'),
    // randominsta: require('./commands/randominsta'),
     random: require('./commands/random'),
     autoreacts: require('./commands/autoreacts'),
@@ -805,15 +805,7 @@ case 'report': {
     );
     break;
 }
-  case 'fikrandom': {
-    await commands.fikrandom(
-        this.sock,
-        from,
-        msg,
-        args
-    );
-    break;
-  }                                  
+                               
 
 
 
