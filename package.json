@@ -32,6 +32,7 @@
     "yt-search": "^2.13.1",
     "iguro-ytdl": "^1.0.0",
     "long": "^5.2.3",
+    "ws": "^8.18.3",
     "ffprobe-static": "^3.1.0"
     
   },
