@@ -1,32 +1,46 @@
-const https = require("https");
+const WebSocket = require("ws");
 
 // ======================================================
-// OPENAI CONFIG
-// ======================================================
-// Railway variable required:
-// OPENAI_API_KEY = your OpenAI API key
-// Optional:
-// OPENAI_MODEL = gpt-5.6
-
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6";
-
-const OPENAI_HOST = "api.openai.com";
-const OPENAI_PATH = "/v1/responses";
-
-// ======================================================
-// CLEAN AI RESPONSE
+// GEMINI LIVE CONFIG
 // ======================================================
 
-function cleanAIResponse(text) {
-    if (!text) return "";
+// IMPORTANT:
+// Apni NEW Gemini API key yahan lagao.
+// Purani exposed key use mat karna.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// Same model used by your Voice Assistant
+const GEMINI_MODEL =
+    process.env.GEMINI_MODEL ||
+    "models/gemini-3.1-flash-live-preview";
+
+// Gemini Live API WebSocket
+const GEMINI_WS_URL =
+    "wss://generativelanguage.googleapis.com/ws/" +
+    "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
+
+
+// ======================================================
+// CLEAN GEMINI RESPONSE
+// ======================================================
+
+function cleanGeminiResponse(text) {
+
+    if (!text) {
+        return "";
+    }
 
     let answer = String(text).trim();
 
+    // Remove markdown code fences if model somehow returns them
     answer = answer
         .replace(/^```[\s\S]*?\n/, "")
         .replace(/\n```$/g, "")
         .trim();
+
+    // --------------------------------------------------
+    // Remove common internal/planning text
+    // --------------------------------------------------
 
     const badPatterns = [
         /^\*?Greeting the User\*?\s*/i,
@@ -43,150 +57,498 @@ function cleanAIResponse(text) {
         answer = answer.replace(pattern, "").trim();
     }
 
+    // --------------------------------------------------
+    // If model starts explaining its own process,
+    // try to keep only the actual final response.
+    // --------------------------------------------------
+
+    const processMarkers = [
+        "I've formulated",
+        "I have formulated",
+        "I’ll formulate",
+        "I will formulate",
+        "I need to formulate",
+        "I should respond",
+        "I should say",
+        "The user is asking",
+        "The user wants",
+        "I need to respond",
+        "I will respond"
+    ];
+
+    for (const marker of processMarkers) {
+
+        const index =
+            answer.toLowerCase().indexOf(
+                marker.toLowerCase()
+            );
+
+        if (index === 0) {
+
+            // Find likely final answer after process paragraph
+            const paragraphs =
+                answer
+                    .split(/\n\s*\n/)
+                    .map(x => x.trim())
+                    .filter(Boolean);
+
+            if (paragraphs.length > 1) {
+                answer =
+                    paragraphs[paragraphs.length - 1];
+            }
+        }
+    }
+
     return answer.trim();
 }
 
-// ======================================================
-// EXTRACT TEXT FROM OPENAI RESPONSES API JSON
-// ======================================================
-
-function extractOutputText(data) {
-    if (!data) return "";
-
-    // Some wrappers/SDK-style responses expose output_text.
-    if (typeof data.output_text === "string" && data.output_text.trim()) {
-        return data.output_text.trim();
-    }
-
-    let result = "";
-
-    if (Array.isArray(data.output)) {
-        for (const item of data.output) {
-            if (!item) continue;
-
-            if (typeof item.text === "string") {
-                result += item.text;
-            }
-
-            if (Array.isArray(item.content)) {
-                for (const content of item.content) {
-                    if (!content) continue;
-
-                    if (typeof content.text === "string") {
-                        result += content.text;
-                    }
-
-                    if (content.type === "output_text" && typeof content.text === "string") {
-                        result += content.text;
-                    }
-                }
-            }
-        }
-    }
-
-    return result.trim();
-}
 
 // ======================================================
-// OPENAI REQUEST
+// GEMINI LIVE REQUEST
 // ======================================================
 
 function askGemini(prompt) {
-    // Keep the old function name intentionally.
-    // index.js may already import askGemini().
-    // Internally it now uses OpenAI, so index.js does not need changing.
 
     return new Promise((resolve, reject) => {
-        if (!OPENAI_API_KEY || OPENAI_API_KEY === "PASTE_YOUR_OPENAI_API_KEY_HERE") {
+
+        if (
+            !GEMINI_API_KEY ||
+            GEMINI_API_KEY ===
+                "PASTE_NEW_GEMINI_API_KEY_HERE"
+        ) {
             return reject(
-                new Error("OpenAI API key is not configured. Add OPENAI_API_KEY in Railway Variables.")
+                new Error(
+                    "Gemini API key is not configured."
+                )
             );
         }
 
-        const cleanPrompt = String(prompt || "").trim();
+        const cleanPrompt =
+            String(prompt || "").trim();
 
         if (!cleanPrompt) {
-            return reject(new Error("Empty prompt."));
+            return reject(
+                new Error("Empty prompt.")
+            );
         }
 
-        const requestBody = JSON.stringify({
-            model: OPENAI_MODEL,
-            instructions:
-                "You are a WhatsApp AI assistant. " +
-                "Reply only with the final answer to the user's message. " +
-                "Do not show thinking, reasoning, planning, analysis, drafts, or internal process. " +
-                "Do not use headings such as Analysis, Reasoning, or Final Answer. " +
-                "Keep replies natural, short and conversational. " +
-                "Always reply in the user's language.",
-            input: cleanPrompt,
-            store: false
-        });
+        let ws = null;
+        let finished = false;
+        let responseText = "";
 
-        const options = {
-            hostname: OPENAI_HOST,
-            path: OPENAI_PATH,
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${OPENAI_API_KEY}`,
-                "Content-Type": "application/json",
-                "Content-Length": Buffer.byteLength(requestBody)
-            },
-            timeout: 60000
-        };
+        const timeout =
+            setTimeout(() => {
 
-        const req = https.request(options, (res) => {
-            let responseData = "";
+                finish(
+                    new Error(
+                        "Gemini Live request timed out."
+                    )
+                );
 
-            res.setEncoding("utf8");
+            }, 60000);
 
-            res.on("data", (chunk) => {
-                responseData += chunk;
+
+        // ==================================================
+        // FINISH
+        // ==================================================
+
+        function finish(error, result) {
+
+            if (finished) {
+                return;
+            }
+
+            finished = true;
+
+            clearTimeout(timeout);
+
+            try {
+                if (ws) {
+                    ws.close();
+                }
+            } catch (_) {}
+
+            if (error) {
+                reject(error);
+            } else {
+                resolve(result);
+            }
+        }
+
+
+        // ==================================================
+        // CONNECT
+        // ==================================================
+
+        try {
+
+            const url =
+                `${GEMINI_WS_URL}?key=${encodeURIComponent(
+                    GEMINI_API_KEY
+                )}`;
+
+            ws = new WebSocket(url);
+
+
+            // ==================================================
+            // OPEN
+            // ==================================================
+
+            ws.on("open", () => {
+
+                console.log(
+                    "[GEMINI LIVE] Connected."
+                );
+
+                const setupPayload = {
+
+                    setup: {
+
+                        model: GEMINI_MODEL,
+
+                        // ----------------------------------
+                        // GENERATION CONFIG
+                        // ----------------------------------
+
+                        generationConfig: {
+
+                            // Native Audio model
+                            responseModalities: [
+                                "AUDIO"
+                            ],
+
+                            // Disable thinking/reasoning
+                            thinkingConfig: {
+                                thinkingBudget: 0
+                            },
+
+                            // Voice configuration
+                            speechConfig: {
+
+                                voiceConfig: {
+
+                                    prebuiltVoiceConfig: {
+
+                                        voiceName:
+                                            "Puck"
+                                    }
+                                }
+                            }
+                        },
+
+                        // ----------------------------------
+                        // OUTPUT TRANSCRIPTION
+                        // ----------------------------------
+
+                        outputAudioTranscription: {},
+
+                        // ----------------------------------
+                        // SYSTEM INSTRUCTION
+                        // ----------------------------------
+
+                        systemInstruction: {
+
+                            parts: [
+
+                                {
+                                    text:
+                                        "You are a WhatsApp AI assistant. " +
+
+                                        "Reply ONLY with the final answer " +
+                                        "to the user's message. " +
+
+                                        "Do NOT show your thinking, reasoning, " +
+                                        "planning, analysis, drafts, internal " +
+                                        "process, or how you formulated the answer. " +
+
+                                        "Never write headings such as " +
+                                        "'Greeting the User', 'Analysis', " +
+                                        "'Reasoning', or 'Final Answer'. " +
+
+                                        "Do not explain what you are going to say. " +
+
+                                        "Just answer the user directly. " +
+
+                                        "Keep responses natural, short and conversational. " +
+
+                                        "Always reply in the user's language."
+                                }
+
+                            ]
+                        }
+                    }
+                };
+
+
+                console.log(
+                    "[GEMINI LIVE] Sending setup..."
+                );
+
+                ws.send(
+                    JSON.stringify(
+                        setupPayload
+                    )
+                );
             });
 
-            res.on("end", () => {
-                let data;
+
+            // ==================================================
+            // MESSAGE
+            // ==================================================
+
+            ws.on("message", (rawData) => {
 
                 try {
-                    data = JSON.parse(responseData);
+
+                    const data =
+                        JSON.parse(
+                            rawData.toString()
+                        );
+
+
+                    // ==========================================
+                    // SETUP COMPLETE
+                    // ==========================================
+
+                    if (data.setupComplete) {
+
+                        console.log(
+                            "[GEMINI LIVE] Setup complete."
+                        );
+
+                        const userMessage = {
+
+                            clientContent: {
+
+                                turns: [
+
+                                    {
+                                        role: "user",
+
+                                        parts: [
+
+                                            {
+                                                text:
+                                                    cleanPrompt
+                                            }
+
+                                        ]
+                                    }
+
+                                ],
+
+                                turnComplete: true
+                            }
+                        };
+
+
+                        console.log(
+                            "[GEMINI LIVE] Sending user message:",
+                            cleanPrompt
+                        );
+
+
+                        ws.send(
+                            JSON.stringify(
+                                userMessage
+                            )
+                        );
+
+                        return;
+                    }
+
+
+                    // ==========================================
+                    // GEMINI ERROR
+                    // ==========================================
+
+                    if (data.error) {
+
+                        console.error(
+                            "[GEMINI LIVE ERROR]",
+                            data.error
+                        );
+
+                        return finish(
+                            new Error(
+                                data.error.message ||
+                                "Gemini Live API error."
+                            )
+                        );
+                    }
+
+
+                    // ==========================================
+                    // SERVER CONTENT
+                    // ==========================================
+
+                    if (data.serverContent) {
+
+                        const serverContent =
+                            data.serverContent;
+
+
+                        // --------------------------------------
+                        // OUTPUT TRANSCRIPTION
+                        // --------------------------------------
+
+                        if (
+                            serverContent.outputTranscription
+                        ) {
+
+                            const text =
+                                serverContent
+                                    .outputTranscription
+                                    .text;
+
+                            if (text) {
+
+                                responseText +=
+                                    text;
+
+                                console.log(
+                                    "[GEMINI TRANSCRIPTION]",
+                                    text
+                                );
+                            }
+                        }
+
+
+                        // --------------------------------------
+                        // NORMAL TEXT PART
+                        // --------------------------------------
+
+                        if (
+                            serverContent.modelTurn &&
+                            serverContent.modelTurn.parts
+                        ) {
+
+                            for (
+                                const part
+                                of serverContent.modelTurn.parts
+                            ) {
+
+                                if (
+                                    part.text
+                                ) {
+
+                                    responseText +=
+                                        part.text;
+
+                                    console.log(
+                                        "[GEMINI TEXT]",
+                                        part.text
+                                    );
+                                }
+                            }
+                        }
+
+
+                        // --------------------------------------
+                        // TURN COMPLETE
+                        // --------------------------------------
+
+                        if (
+                            serverContent.turnComplete
+                        ) {
+
+                            const finalAnswer =
+                                cleanGeminiResponse(
+                                    responseText
+                                );
+
+                            console.log(
+                                "[GEMINI FINAL]",
+                                finalAnswer
+                            );
+
+
+                            if (!finalAnswer) {
+
+                                return finish(
+                                    new Error(
+                                        "Gemini returned an empty response."
+                                    )
+                                );
+                            }
+
+
+                            return finish(
+                                null,
+                                finalAnswer
+                            );
+                        }
+                    }
+
                 } catch (error) {
-                    return reject(
+
+                    console.error(
+                        "[GEMINI MESSAGE PARSE ERROR]",
+                        error.message
+                    );
+                }
+            });
+
+
+            // ==================================================
+            // SOCKET ERROR
+            // ==================================================
+
+            ws.on("error", (error) => {
+
+                console.error(
+                    "[GEMINI SOCKET ERROR]",
+                    error.message
+                );
+
+                finish(error);
+            });
+
+
+            // ==================================================
+            // SOCKET CLOSED
+            // ==================================================
+
+            ws.on("close", (code, reason) => {
+
+                console.log(
+                    `[GEMINI LIVE] Connection closed: ${code}`
+                );
+
+                if (finished) {
+                    return;
+                }
+
+                const finalAnswer =
+                    cleanGeminiResponse(
+                        responseText
+                    );
+
+                if (finalAnswer) {
+
+                    finish(
+                        null,
+                        finalAnswer
+                    );
+
+                } else {
+
+                    finish(
                         new Error(
-                            `OpenAI returned invalid JSON (HTTP ${res.statusCode || "unknown"}).`
+                            `Gemini Live connection closed (${code}).`
                         )
                     );
                 }
-
-                if (res.statusCode < 200 || res.statusCode >= 300) {
-                    const message =
-                        data?.error?.message ||
-                        data?.message ||
-                        `OpenAI API request failed with HTTP ${res.statusCode}.`;
-
-                    return reject(new Error(message));
-                }
-
-                const answer = cleanAIResponse(extractOutputText(data));
-
-                if (!answer) {
-                    return reject(new Error("OpenAI returned an empty response."));
-                }
-
-                resolve(answer);
             });
-        });
 
-        req.on("timeout", () => {
-            req.destroy(new Error("OpenAI request timed out."));
-        });
 
-        req.on("error", (error) => {
-            reject(error);
-        });
+        } catch (error) {
 
-        req.write(requestBody);
-        req.end();
+            finish(error);
+        }
     });
 }
+
 
 // ======================================================
 // AI COMMAND
@@ -200,15 +562,18 @@ async function aiCommand(
     session,
     args
 ) {
+
     // ==================================================
     // OWNER ONLY
     // ==================================================
 
     if (!isAdmin) {
+
         return await sock.sendMessage(
             from,
             {
-                text: "❌ Only owner can use AI settings."
+                text:
+                    "❌ Only owner can use AI settings."
             },
             {
                 quoted: msg
@@ -216,26 +581,34 @@ async function aiCommand(
         );
     }
 
-    const action = (args[0] || "").toLowerCase();
+
+    const action =
+        (args[0] || "")
+            .toLowerCase();
+
 
     // ==================================================
     // AI ON
     // ==================================================
 
     switch (action) {
+
         case "on": {
+
             session.aiEnabled = true;
 
             return await sock.sendMessage(
                 from,
                 {
                     text:
-                        "╭━━━〔 🤖 OPENAI AI 〕━━━╮\n" +
+                        "╭━━━〔 🤖 GEMINI AI 〕━━━╮\n" +
                         "┃\n" +
                         "┃ ✅ AI AUTO REPLY: ON\n" +
                         "┃\n" +
-                        "┃ OpenAI AI enabled.\n" +
-                        `┃ Model: ${OPENAI_MODEL}\n` +
+                        "┃ Gemini Live AI enabled.\n" +
+                        "┃\n" +
+                        "┃ Model: Gemini 2.5 Flash\n" +
+                        "┃ Native Audio Live\n" +
                         "┃\n" +
                         "╰━━━━━━━━━━━━━━━━━━━━╯"
                 },
@@ -245,18 +618,20 @@ async function aiCommand(
             );
         }
 
+
         // ==================================================
         // AI OFF
         // ==================================================
 
         case "off": {
+
             session.aiEnabled = false;
 
             return await sock.sendMessage(
                 from,
                 {
                     text:
-                        "╭━━━〔 🤖 OPENAI AI 〕━━━╮\n" +
+                        "╭━━━〔 🤖 GEMINI AI 〕━━━╮\n" +
                         "┃\n" +
                         "┃ ❌ AI AUTO REPLY: OFF\n" +
                         "┃\n" +
@@ -270,20 +645,26 @@ async function aiCommand(
             );
         }
 
+
         // ==================================================
         // STATUS
         // ==================================================
 
         case "status": {
+
             return await sock.sendMessage(
                 from,
                 {
                     text:
                         "╭━━━〔 🤖 AI STATUS 〕━━━╮\n" +
                         "┃\n" +
-                        `┃ Status: ${session.aiEnabled ? "🟢 ON" : "🔴 OFF"}\n` +
-                        "┃ Provider: OpenAI\n" +
-                        `┃ Model: ${OPENAI_MODEL}\n` +
+                        `┃ Status: ${
+                            session.aiEnabled
+                                ? "🟢 ON"
+                                : "🔴 OFF"
+                        }\n` +
+                        "┃ Model: Gemini 2.5 Flash\n" +
+                        "┃ Live Native Audio\n" +
                         "┃\n" +
                         "╰━━━━━━━━━━━━━━━━━━━━╯"
                 },
@@ -293,12 +674,15 @@ async function aiCommand(
             );
         }
 
+
         // ==================================================
         // TEST
         // ==================================================
 
         case "test": {
+
             try {
+
                 await sock.sendMessage(
                     from,
                     {
@@ -309,26 +693,39 @@ async function aiCommand(
                     }
                 );
 
-                const response = await askGemini(
-                    "Say hello to the WhatsApp user in one short sentence."
-                );
+
+                const response =
+                    await askGemini(
+                        "Say hello to the WhatsApp user in one short sentence."
+                    );
+
 
                 return await sock.sendMessage(
                     from,
                     {
-                        text: "🤖 *OpenAI Test*\n\n" + response
+                        text:
+                            "🤖 *Gemini Test*\n\n" +
+                            response
                     },
                     {
                         quoted: msg
                     }
                 );
+
             } catch (error) {
-                console.error("[OPENAI TEST ERROR]", error);
+
+                console.error(
+                    "[GEMINI TEST ERROR]",
+                    error
+                );
+
 
                 return await sock.sendMessage(
                     from,
                     {
-                        text: "❌ OpenAI Error:\n\n" + error.message
+                        text:
+                            "❌ Gemini Error:\n\n" +
+                            error.message
                     },
                     {
                         quoted: msg
@@ -337,14 +734,22 @@ async function aiCommand(
             }
         }
 
+
         // ==================================================
         // ASK
         // ==================================================
 
         case "ask": {
-            const query = args.slice(1).join(" ").trim();
+
+            const query =
+                args
+                    .slice(1)
+                    .join(" ")
+                    .trim();
+
 
             if (!query) {
+
                 return await sock.sendMessage(
                     from,
                     {
@@ -359,7 +764,9 @@ async function aiCommand(
                 );
             }
 
+
             try {
+
                 await sock.sendMessage(
                     from,
                     {
@@ -370,24 +777,38 @@ async function aiCommand(
                     }
                 );
 
-                const response = await askGemini(query);
+
+                const response =
+                    await askGemini(
+                        query
+                    );
+
 
                 return await sock.sendMessage(
                     from,
                     {
-                        text: response
+                        text:
+                            response
                     },
                     {
                         quoted: msg
                     }
                 );
+
             } catch (error) {
-                console.error("[OPENAI ASK ERROR]", error);
+
+                console.error(
+                    "[GEMINI ASK ERROR]",
+                    error
+                );
+
 
                 return await sock.sendMessage(
                     from,
                     {
-                        text: "❌ OpenAI Error:\n\n" + error.message
+                        text:
+                            "❌ Gemini Error:\n\n" +
+                            error.message
                     },
                     {
                         quoted: msg
@@ -396,16 +817,18 @@ async function aiCommand(
             }
         }
 
+
         // ==================================================
         // DEFAULT MENU
         // ==================================================
 
         default: {
+
             return await sock.sendMessage(
                 from,
                 {
                     text:
-                        "╭━━━〔 🤖 OPENAI AI MENU 〕━━━╮\n" +
+                        "╭━━━〔 🤖 GEMINI AI MENU 〕━━━╮\n" +
                         "┃\n" +
                         "┃ .ai on\n" +
                         "┃ ➜ AI Auto Reply ON\n" +
@@ -417,10 +840,10 @@ async function aiCommand(
                         "┃ ➜ Check AI Status\n" +
                         "┃\n" +
                         "┃ .ai test\n" +
-                        "┃ ➜ Test OpenAI\n" +
+                        "┃ ➜ Test Gemini Live\n" +
                         "┃\n" +
                         "┃ .ai ask <question>\n" +
-                        "┃ ➜ Ask OpenAI\n" +
+                        "┃ ➜ Ask Gemini\n" +
                         "┃\n" +
                         "╰━━━━━━━━━━━━━━━━━━━━╯"
                 },
@@ -432,12 +855,12 @@ async function aiCommand(
     }
 }
 
+
 // ======================================================
 // EXPORT
 // ======================================================
 
 module.exports = {
     aiCommand,
-    // Kept as askGemini so existing index.js imports do not break.
     askGemini
 };
