@@ -21,6 +21,7 @@ const toBold = (text) => {
 const commands = {
     sticker: require('./commands/sticker'),
         ai: require('./commands/ai').aiCommand,
+	kick: require('./commands/kick'),
         askGemini: require('./commands/ai').askGemini,
     weather: require('./commands/weather'),
   //  today: require("./commands/today"),
