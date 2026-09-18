@@ -1,5 +1,6 @@
 const yts = require("yt-search");
 const ytdlp = require("youtube-dl-exec");
+const ffmpeg = require("ffmpeg-static");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -11,40 +12,44 @@ async function videoCommand(sock, chatId, message) {
 
     try {
 
-        // reactions
-        for (const emoji of ["📥","⏳","🎥"]) {
-            await sock.sendMessage(chatId,{
-                react:{
-                    text:emoji,
-                    key:message.key
+        for (const emoji of ["📥", "⏳", "🎥"]) {
+            await sock.sendMessage(chatId, {
+                react: {
+                    text: emoji,
+                    key: message.key
                 }
             });
         }
 
 
-        const content =
+        const messageContent =
             message.message?.ephemeralMessage?.message ||
             message.message?.viewOnceMessage?.message ||
-            message.message?.conversation ||
-            message.message?.extendedTextMessage?.text ||
-            "";
+            message.message?.viewOnceMessageV2?.message ||
+            message.message;
 
 
-        const query = content
-            .replace(/^\.video\s*/i,"")
+        const text = (
+            messageContent?.conversation ||
+            messageContent?.extendedTextMessage?.text ||
+            messageContent?.imageMessage?.caption ||
+            messageContent?.videoMessage?.caption ||
+            ""
+        ).trim();
+
+
+        const query = text
+            .replace(/^\.video\s*/i, "")
             .trim();
 
 
-
-        if(!query){
-
+        if (!query) {
             return await sock.sendMessage(chatId,{
                 text:
                 "❌ Use:\n.video <video name/link>"
             },{
                 quoted:message
             });
-
         }
 
 
@@ -54,8 +59,6 @@ async function videoCommand(sock, chatId, message) {
         let thumbnail = "";
 
 
-
-        // Link
 
         if(
             query.includes("youtube.com") ||
@@ -69,8 +72,11 @@ async function videoCommand(sock, chatId, message) {
 
                 const info = await ytdlp(url,{
                     dumpSingleJson:true,
-                    noPlaylist:true
+                    noPlaylist:true,
+                    extractorArgs:
+                    "youtube:player_client=android"
                 });
+
 
                 title =
                 info.title || title;
@@ -78,11 +84,11 @@ async function videoCommand(sock, chatId, message) {
                 thumbnail =
                 info.thumbnail || "";
 
-            }catch(e){}
+            } catch(e){}
 
 
 
-        }else{
+        } else {
 
 
             const search = await yts(query);
@@ -90,11 +96,9 @@ async function videoCommand(sock, chatId, message) {
 
             if(!search.videos.length){
 
-                return await sock.sendMessage(chatId,{
-                    text:"❌ Video not found"
-                },{
-                    quoted:message
-                });
+                throw new Error(
+                    "No video found"
+                );
 
             }
 
@@ -105,7 +109,6 @@ async function videoCommand(sock, chatId, message) {
             url = video.url;
             title = video.title;
             thumbnail = video.thumbnail;
-
 
         }
 
@@ -128,7 +131,7 @@ async function videoCommand(sock, chatId, message) {
                 quoted:message
             });
 
-        }else{
+        } else {
 
             await sock.sendMessage(chatId,{
                 text:
@@ -152,21 +155,31 @@ async function videoCommand(sock, chatId, message) {
 
 
 
-
-        console.log("Downloading:",url);
+        console.log(
+            "Downloading:",
+            url
+        );
 
 
 
         await ytdlp(url,{
 
             format:
-            "best[ext=mp4]/best",
+            "bestvideo+bestaudio/best",
 
-            output:filePath,
+            mergeOutputFormat:
+            "mp4",
+
+            output:
+            filePath,
 
             noPlaylist:true,
 
-            socketTimeout:60
+            ffmpegLocation:
+            ffmpeg,
+
+            extractorArgs:
+            "youtube:player_client=android"
 
         });
 
@@ -191,11 +204,14 @@ async function videoCommand(sock, chatId, message) {
 
 
 
+
         await sock.sendMessage(chatId,{
 
-            video:videoBuffer,
+            video:
+            videoBuffer,
 
-            mimetype:"video/mp4",
+            mimetype:
+            "video/mp4",
 
             fileName:
             `${title}.mp4`,
@@ -222,8 +238,7 @@ async function videoCommand(sock, chatId, message) {
 
 
 
-    }catch(error){
-
+    } catch(error){
 
         console.log(
             "VIDEO ERROR:",
@@ -242,12 +257,14 @@ ${error.message}`
 
 
 
-    }finally{
+    } finally {
 
 
         if(filePath && fs.existsSync(filePath)){
 
-            fs.unlinkSync(filePath);
+            try{
+                fs.unlinkSync(filePath);
+            }catch{}
 
         }
 
