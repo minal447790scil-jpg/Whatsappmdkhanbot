@@ -2,34 +2,57 @@ const axios = require("axios");
 const yts = require("yt-search");
 
 
-async function cobaltDownload(url) {
+function getText(message){
+
+    const msg = message?.message || {};
+
+    return (
+        msg.conversation ||
+        msg.extendedTextMessage?.text ||
+        msg.imageMessage?.caption ||
+        msg.videoMessage?.caption ||
+        ""
+    ).trim();
+
+}
+
+
+
+async function tornadoDownload(url){
 
     const res = await axios.post(
-        "https://api.cobalt.tools/",
+        process.env.TORNADO_API_URL,
         {
-            url: url,
-            videoQuality: "1080",
-            isAudioOnly: false,
-            filenameStyle: "pretty"
+            url:url,
+            quality:"1080"
         },
         {
-            headers: {
-                "Accept": "application/json",
+            headers:{
                 "Authorization":
-                `Api-Key ${process.env.COBALT_API_KEY}`
-            }
+                `Bearer ${process.env.TORNADO_API_KEY}`,
+
+                "Content-Type":
+                "application/json"
+            },
+
+            timeout:120000
         }
     );
 
 
-    if(res.data?.url){
-        return res.data.url;
-    }
-
-
-    throw new Error(
-        "Cobalt download URL not found"
+    console.log(
+        "TORNADO RESPONSE:",
+        res.data
     );
+
+
+    return (
+        res.data.url ||
+        res.data.download ||
+        res.data.downloadUrl ||
+        res.data.result?.url
+    );
+
 }
 
 
@@ -39,10 +62,7 @@ async function videoCommand(sock, chatId, message){
 try{
 
 
-const text =
-message.message?.conversation ||
-message.message?.extendedTextMessage?.text ||
-"";
+const text = getText(message);
 
 
 const query =
@@ -55,7 +75,8 @@ if(!query){
 return sock.sendMessage(
 chatId,
 {
-text:"🎥 Use: .video song name"
+text:
+"🎥 Use:\n.video video name"
 },
 {
 quoted:message
@@ -66,15 +87,21 @@ quoted:message
 
 
 
+await sock.sendMessage(chatId,{
+react:{
+text:"🔎",
+key:message.key
+}
+});
+
+
+
 const search =
 await yts(query);
 
 
-const video =
-search.videos[0];
 
-
-if(!video){
+if(!search.videos.length){
 
 throw new Error(
 "No video found"
@@ -84,16 +111,22 @@ throw new Error(
 
 
 
+const video =
+search.videos[0];
+
+
+
 await sock.sendMessage(
 chatId,
 {
 image:{
 url:video.thumbnail
 },
+
 caption:
 `🎥 *${video.title}*
 
-📥 Downloading 1080p...`
+📥 Downloading...`
 },
 {
 quoted:message
@@ -103,7 +136,17 @@ quoted:message
 
 
 const downloadUrl =
-await cobaltDownload(video.url);
+await tornadoDownload(video.url);
+
+
+
+if(!downloadUrl){
+
+throw new Error(
+"No download URL from Tornado"
+);
+
+}
 
 
 
@@ -113,7 +156,10 @@ chatId,
 video:{
 url:downloadUrl
 },
-mimetype:"video/mp4",
+
+mimetype:
+"video/mp4",
+
 caption:
 `🎥 *${video.title}*
 
@@ -126,22 +172,39 @@ quoted:message
 
 
 
+await sock.sendMessage(chatId,{
+react:{
+text:"✅",
+key:message.key
 }
+});
 
+
+}
 catch(err){
 
-console.log(err);
+
+console.log(
+"VIDEO ERROR:",
+err.response?.data || err.message
+);
+
+
 
 await sock.sendMessage(
 chatId,
 {
 text:
-`❌ Video Download Failed\n\n${err.message}`
+`❌ Video Download Failed\n\n${
+err.response?.data?.message ||
+err.message
+}`
 },
 {
 quoted:message
 }
 );
+
 
 }
 
