@@ -1,20 +1,18 @@
-const ytdl = require("shadowx-ytdl");
+const {
+    getVideoInfo,
+    downloadStream
+} = require("@natsu.darkcore/ytdl-darkcore");
+
 const yts = require("yt-search");
-const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 
 
-function getText(message) {
+function getText(message){
 
     let msg = message?.message || message;
 
-    if (!msg) return "";
-
-    if (msg.ephemeralMessage?.message)
-        msg = msg.ephemeralMessage.message;
-
-    if (msg.viewOnceMessage?.message)
-        msg = msg.viewOnceMessage.message;
-
+    if(!msg) return "";
 
     return (
         msg.conversation ||
@@ -27,9 +25,9 @@ function getText(message) {
 
 
 
-async function videoCommand(sock, chatId, message) {
+async function videoCommand(sock, chatId, message){
 
-try {
+try{
 
 
 const text = getText(message);
@@ -47,7 +45,8 @@ return sock.sendMessage(
 chatId,
 {
 text:
-"🎥 Usage:\n.video video name"
+`🎥 Usage:
+.video video name`
 },
 {
 quoted:message
@@ -67,20 +66,21 @@ key:message.key
 
 
 
-const search = await yts(query);
+const search =
+await yts(query);
 
 
 
 if(!search.videos.length){
 
-throw new Error("No video found");
+throw new Error("Video not found");
 
 }
 
 
 
-const video = search.videos[0];
-
+const video =
+search.videos[0];
 
 
 
@@ -90,10 +90,11 @@ chatId,
 image:{
 url:video.thumbnail
 },
+
 caption:
 `🎥 *${video.title}*
 
-⏳ Downloading 1080p...`
+📥 Downloading...`
 },
 {
 quoted:message
@@ -104,32 +105,37 @@ quoted:message
 
 
 
-// FORCE 1080 ONLY
+// GET INFO
 
-const result =
-await ytdl.downloadVideo(
-video.url,
-1080
-);
+const info =
+await getVideoInfo(video.url);
 
 
 
 console.log(
-"YTDL:",
-JSON.stringify(result,null,2)
+"TITLE:",
+info.title
+);
+
+console.log(
+"FORMATS:",
+info.formats.length
 );
 
 
 
-const url =
-result?.download?.downloadUrl;
+
+// TRY BEST VIDEO
+
+const bestVideo =
+info.bestVideo;
 
 
 
-if(!url){
+if(!bestVideo){
 
 throw new Error(
-"1080 download URL missing"
+"No video format found"
 );
 
 }
@@ -137,38 +143,36 @@ throw new Error(
 
 
 
-const res =
-await axios.get(
-url,
-{
-responseType:"arraybuffer",
-timeout:300000
-}
+const filePath =
+path.join(
+__dirname,
+`${Date.now()}.mp4`
+);
+
+
+
+
+// DOWNLOAD
+
+await downloadStream(
+bestVideo,
+filePath
 );
 
 
 
 const buffer =
-Buffer.from(res.data);
+fs.readFileSync(filePath);
 
 
 
-console.log(
-"SIZE:",
-(buffer.length/1024/1024).toFixed(2),
-"MB"
-);
-
-
-
-if(buffer.length < 500000){
+if(buffer.length < 10000){
 
 throw new Error(
-"Video file too small"
+"Downloaded file invalid"
 );
 
 }
-
 
 
 
@@ -179,7 +183,8 @@ chatId,
 
 video:buffer,
 
-mimetype:"video/mp4",
+mimetype:
+"video/mp4",
 
 fileName:
 `${video.title}.mp4`,
@@ -194,6 +199,10 @@ caption:
 quoted:message
 }
 );
+
+
+
+fs.unlinkSync(filePath);
 
 
 
@@ -216,11 +225,12 @@ error
 );
 
 
+
 await sock.sendMessage(
 chatId,
 {
 text:
-`❌ *Video Download Failed*
+`❌ Video Download Failed
 
 ${error.message}`
 },
@@ -232,7 +242,9 @@ quoted:message
 
 }
 
+
 }
+
 
 
 module.exports = videoCommand;
