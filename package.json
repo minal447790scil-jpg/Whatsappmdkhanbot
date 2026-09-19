@@ -14,6 +14,7 @@
     "@pontalabs/ytdl": "latest",
     "axios": "^1.6.0",
      "axios": "^1.8.4",
+    "@distube/ytdl-core": "latest",
     "trs-media-downloader": "^1.0.0",
     "cheerio": "^1.2.0",
     "dotenv": "^16.6.1",
