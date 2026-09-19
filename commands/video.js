@@ -1,5 +1,6 @@
-const ytdl = require("@distube/ytdl-core");
+const ytdl = require("@pontalabs/ytdl");
 const yts = require("yt-search");
+const axios = require("axios");
 
 
 // ===============================
@@ -32,6 +33,7 @@ function getText(message) {
 }
 
 
+
 // ===============================
 // VIDEO COMMAND
 // ===============================
@@ -39,11 +41,12 @@ async function videoCommand(sock, chatId, message) {
 
     try {
 
+
         const text = getText(message);
 
 
         console.log(
-            "VIDEO TEXT:",
+            "VIDEO COMMAND:",
             text
         );
 
@@ -56,7 +59,7 @@ async function videoCommand(sock, chatId, message) {
 
         if (!query) {
 
-            return await sock.sendMessage(
+            return sock.sendMessage(
                 chatId,
                 {
                     text:
@@ -72,7 +75,9 @@ Example:
                     quoted: message
                 }
             );
+
         }
+
 
 
 
@@ -85,18 +90,19 @@ Example:
 
 
 
-        // SEARCH VIDEO
+        // SEARCH
 
         const search =
             await yts(query);
 
 
 
-        if (!search.videos.length) {
+        if(!search.videos.length){
 
             throw new Error(
-                "No video found"
+                "Video not found"
             );
+
         }
 
 
@@ -129,6 +135,7 @@ Example:
 
 
 
+
         await sock.sendMessage(chatId,{
             react:{
                 text:"⏳",
@@ -140,50 +147,78 @@ Example:
 
 
         // ===============================
-        // DOWNLOAD HD STREAM
+        // PONTALABS DOWNLOAD
         // ===============================
 
 
-        const stream = ytdl(
-            video.url,
-            {
-                quality:"highest",
+        const result =
+            await ytdl.downloadVideo(
+                video.url,
+                720
+            );
 
-                filter:
-                "audioandvideo"
-            }
+
+        console.log(
+            "PONTALABS RESULT:",
+            result
         );
 
 
 
-        const chunks = [];
+        const downloadUrl =
+            result?.download?.downloadUrl;
 
 
 
-        for await (const chunk of stream) {
-
-            chunks.push(chunk);
-
-        }
-
-
-
-        const videoBuffer =
-            Buffer.concat(chunks);
-
-
-
-        if (!videoBuffer.length) {
+        if(!downloadUrl){
 
             throw new Error(
-                "Video buffer empty"
+                "No video download URL"
             );
+
         }
 
 
 
 
+
+        // ===============================
+        // DOWNLOAD BUFFER
+        // ===============================
+
+
+        const file =
+            await axios.get(
+                downloadUrl,
+                {
+                    responseType:
+                    "arraybuffer",
+
+                    timeout:300000
+                }
+            );
+
+
+
+        const buffer =
+            Buffer.from(file.data);
+
+
+
+        if(buffer.length < 10000){
+
+            throw new Error(
+                "Video file invalid"
+            );
+
+        }
+
+
+
+
+        // ===============================
         // SEND VIDEO
+        // ===============================
 
 
         await sock.sendMessage(
@@ -191,7 +226,7 @@ Example:
             {
 
                 video:
-                videoBuffer,
+                buffer,
 
 
                 mimetype:
@@ -205,13 +240,15 @@ Example:
                 caption:
 `🎥 *${video.title}*
 
-✨ Downloaded by SALMAN KHAN`
+✨ *Downloaded by SALMAN KHAN*`
 
             },
             {
                 quoted:message
             }
         );
+
+
 
 
 
@@ -225,7 +262,7 @@ Example:
 
 
     }
-    catch(error) {
+    catch(error){
 
 
         console.log(
@@ -251,6 +288,7 @@ ${error.message}`
     }
 
 }
+
 
 
 module.exports = videoCommand;
