@@ -1,26 +1,35 @@
-const {
-    getVideoInfo,
-    downloadStream
-} = require("@natsu.darkcore/ytdl-darkcore");
-
+const axios = require("axios");
 const yts = require("yt-search");
-const fs = require("fs");
-const path = require("path");
 
 
-function getText(message){
+async function cobaltDownload(url) {
 
-    let msg = message?.message || message;
+    const res = await axios.post(
+        "https://api.cobalt.tools/",
+        {
+            url: url,
+            videoQuality: "1080",
+            isAudioOnly: false,
+            filenameStyle: "pretty"
+        },
+        {
+            headers: {
+                "Accept": "application/json",
+                "Authorization":
+                `Api-Key ${process.env.COBALT_API_KEY}`
+            }
+        }
+    );
 
-    if(!msg) return "";
 
-    return (
-        msg.conversation ||
-        msg.extendedTextMessage?.text ||
-        msg.imageMessage?.caption ||
-        msg.videoMessage?.caption ||
-        ""
-    ).trim();
+    if(res.data?.url){
+        return res.data.url;
+    }
+
+
+    throw new Error(
+        "Cobalt download URL not found"
+    );
 }
 
 
@@ -30,12 +39,14 @@ async function videoCommand(sock, chatId, message){
 try{
 
 
-const text = getText(message);
+const text =
+message.message?.conversation ||
+message.message?.extendedTextMessage?.text ||
+"";
 
 
-const query = text
-.replace(/^\.video\s*/i,"")
-.trim();
+const query =
+text.replace(/^\.video\s*/i,"").trim();
 
 
 
@@ -44,9 +55,7 @@ if(!query){
 return sock.sendMessage(
 chatId,
 {
-text:
-`🎥 Usage:
-.video video name`
+text:"🎥 Use: .video song name"
 },
 {
 quoted:message
@@ -57,30 +66,21 @@ quoted:message
 
 
 
-await sock.sendMessage(chatId,{
-react:{
-text:"🔎",
-key:message.key
-}
-});
-
-
-
 const search =
 await yts(query);
 
 
-
-if(!search.videos.length){
-
-throw new Error("Video not found");
-
-}
-
-
-
 const video =
 search.videos[0];
+
+
+if(!video){
+
+throw new Error(
+"No video found"
+);
+
+}
 
 
 
@@ -90,11 +90,10 @@ chatId,
 image:{
 url:video.thumbnail
 },
-
 caption:
 `🎥 *${video.title}*
 
-📥 Downloading...`
+📥 Downloading 1080p...`
 },
 {
 quoted:message
@@ -103,97 +102,22 @@ quoted:message
 
 
 
-
-
-// GET INFO
-
-const info =
-await getVideoInfo(video.url);
-
-
-
-console.log(
-"TITLE:",
-info.title
-);
-
-console.log(
-"FORMATS:",
-info.formats.length
-);
-
-
-
-
-// TRY BEST VIDEO
-
-const bestVideo =
-info.bestVideo;
-
-
-
-if(!bestVideo){
-
-throw new Error(
-"No video format found"
-);
-
-}
-
-
-
-
-const filePath =
-path.join(
-__dirname,
-`${Date.now()}.mp4`
-);
-
-
-
-
-// DOWNLOAD
-
-await downloadStream(
-bestVideo,
-filePath
-);
-
-
-
-const buffer =
-fs.readFileSync(filePath);
-
-
-
-if(buffer.length < 10000){
-
-throw new Error(
-"Downloaded file invalid"
-);
-
-}
-
+const downloadUrl =
+await cobaltDownload(video.url);
 
 
 
 await sock.sendMessage(
 chatId,
 {
-
-video:buffer,
-
-mimetype:
-"video/mp4",
-
-fileName:
-`${video.title}.mp4`,
-
+video:{
+url:downloadUrl
+},
+mimetype:"video/mp4",
 caption:
 `🎥 *${video.title}*
 
 ✨ *Downloaded by SALMAN KHAN*`
-
 },
 {
 quoted:message
@@ -202,49 +126,26 @@ quoted:message
 
 
 
-fs.unlinkSync(filePath);
-
-
-
-await sock.sendMessage(chatId,{
-react:{
-text:"✅",
-key:message.key
 }
-});
 
+catch(err){
 
-
-}
-catch(error){
-
-
-console.log(
-"VIDEO ERROR:",
-error
-);
-
-
+console.log(err);
 
 await sock.sendMessage(
 chatId,
 {
 text:
-`❌ Video Download Failed
-
-${error.message}`
+`❌ Video Download Failed\n\n${err.message}`
 },
 {
 quoted:message
 }
 );
 
-
 }
 
-
 }
-
 
 
 module.exports = videoCommand;
