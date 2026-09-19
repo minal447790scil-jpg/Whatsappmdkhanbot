@@ -3,6 +3,7 @@ const yts = require("yt-search");
 const axios = require("axios");
 
 
+
 function getText(message) {
 
     let msg = message?.message || message;
@@ -30,75 +31,9 @@ function getText(message) {
 
 
 
-async function getVideoDownload(url) {
-
-    const qualities = [
-        1080,
-        720,
-        480,
-        360
-    ];
-
-
-    for (const quality of qualities) {
-
-        try {
-
-            console.log(
-                "Trying quality:",
-                quality
-            );
-
-
-            const result =
-                await ytdl.downloadVideo(
-                    url,
-                    quality
-                );
-
-
-            console.log(
-                "YTDL RESULT:",
-                JSON.stringify(result, null, 2)
-            );
-
-
-            const downloadUrl =
-                result?.download?.downloadUrl;
-
-
-            if(downloadUrl){
-
-                return {
-                    url: downloadUrl,
-                    quality: quality
-                };
-
-            }
-
-
-        } catch(err){
-
-            console.log(
-                "Quality failed:",
-                quality,
-                err.message
-            );
-
-        }
-
-    }
-
-
-    return null;
-}
-
-
-
 
 
 async function videoCommand(sock, chatId, message) {
-
 
 try {
 
@@ -166,6 +101,7 @@ search.videos[0];
 
 
 
+// PREVIEW
 
 await sock.sendMessage(
 chatId,
@@ -179,7 +115,7 @@ caption:
 
 ⏱️ ${video.timestamp}
 
-📥 Downloading HD...`
+📥 Downloading 1080p...`
 },
 {
 quoted:message
@@ -190,52 +126,75 @@ quoted:message
 
 
 
-const download =
-await getVideoDownload(
+// FORCE 1080P ONLY
+
+
+console.log(
+"Downloading 1080:",
 video.url
 );
 
 
 
-if(!download){
+const result =
+await ytdl.downloadVideo(
+    video.url,
+    1080
+);
+
+
+
+console.log(
+"SHADOWX RESULT:",
+JSON.stringify(result,null,2)
+);
+
+
+
+const downloadUrl =
+result?.download?.downloadUrl;
+
+
+
+if(!downloadUrl){
 
 throw new Error(
-"All qualities failed"
+"1080p download URL not found"
 );
 
 }
 
 
 
-console.log(
-"Selected:",
-download.quality
-);
 
 
-
+// DOWNLOAD BUFFER
 
 
 const response =
 await axios.get(
-download.url,
+downloadUrl,
 {
 responseType:"arraybuffer",
+
 timeout:300000
 }
 );
 
 
 
+const buffer =
+Buffer.from(response.data);
+
+
+
 console.log(
-"VIDEO TYPE:",
-response.headers["content-type"]
+"Video Size:",
+(buffer.length/1024/1024).toFixed(2),
+"MB"
 );
 
 
-
-const buffer =
-Buffer.from(response.data);
 
 
 
@@ -251,6 +210,9 @@ throw new Error(
 
 
 
+// SEND VIDEO
+
+
 await sock.sendMessage(
 chatId,
 {
@@ -262,6 +224,7 @@ mimetype:
 
 fileName:
 `${video.title}.mp4`,
+
 
 caption:
 `🎥 *${video.title}*
@@ -316,6 +279,7 @@ quoted:message
 
 
 }
+
 
 
 module.exports = videoCommand;
