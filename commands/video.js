@@ -2,9 +2,13 @@ const axios = require("axios");
 const yts = require("yt-search");
 
 
+const BASE_URL = "https://api.tornadoapi.io";
+
+
+
 function getText(message){
 
-    const msg = message?.message || {};
+    let msg = message?.message || {};
 
     return (
         msg.conversation ||
@@ -18,55 +22,148 @@ function getText(message){
 
 
 
-async function tornadoDownload(url){
 
-    const res = await axios.post(
-        process.env.TORNADO_API_URL,
+async function tornadoDownload(youtubeUrl){
+
+
+    // Create download job
+
+    const create = await axios.post(
+        `${BASE_URL}/jobs`,
         {
-            url:url,
-            quality:"1080"
+            url: youtubeUrl,
+            quality: "1080"
         },
         {
             headers:{
-                "Authorization":
-                `Bearer ${process.env.TORNADO_API_KEY}`,
+                "x-api-key":
+                process.env.TORNADO_API_KEY,
 
                 "Content-Type":
                 "application/json"
-            },
-
-            timeout:120000
+            }
         }
     );
 
 
+
+    const jobId =
+    create.data.job_id;
+
+
+
     console.log(
-        "TORNADO RESPONSE:",
-        res.data
+        "TORNADO JOB:",
+        jobId
     );
 
 
-    return (
-        res.data.url ||
-        res.data.download ||
-        res.data.downloadUrl ||
-        res.data.result?.url
-    );
+
+    let downloadUrl = null;
+
+
+
+    // Check job status
+
+    for(let i = 0; i < 40; i++){
+
+
+        await new Promise(
+            resolve => setTimeout(resolve,3000)
+        );
+
+
+
+        const status = await axios.get(
+            `${BASE_URL}/jobs/${jobId}`,
+            {
+                headers:{
+                    "x-api-key":
+                    process.env.TORNADO_API_KEY
+                }
+            }
+        );
+
+
+
+        console.log(
+            "TORNADO STATUS:",
+            status.data
+        );
+
+
+
+        const data = status.data;
+
+
+
+        if(
+            data.file_url ||
+            data.download_url ||
+            data.url
+        ){
+
+            downloadUrl =
+            data.file_url ||
+            data.download_url ||
+            data.url;
+
+            break;
+
+        }
+
+
+
+        if(data.status === "failed"){
+
+            throw new Error(
+                "Tornado download failed"
+            );
+
+        }
+
+
+    }
+
+
+
+    if(!downloadUrl){
+
+        throw new Error(
+            "Download timeout"
+        );
+
+    }
+
+
+
+    return downloadUrl;
 
 }
 
 
 
-async function videoCommand(sock, chatId, message){
+
+
+
+async function videoCommand(
+    sock,
+    chatId,
+    message
+){
+
 
 try{
 
 
-const text = getText(message);
+const text =
+getText(message);
+
 
 
 const query =
-text.replace(/^\.video\s*/i,"").trim();
+text.replace(/^\.video\s*/i,"")
+.trim();
 
 
 
@@ -76,7 +173,8 @@ return sock.sendMessage(
 chatId,
 {
 text:
-"🎥 Use:\n.video video name"
+`🎥 Usage:
+.video video name`
 },
 {
 quoted:message
@@ -87,12 +185,17 @@ quoted:message
 
 
 
-await sock.sendMessage(chatId,{
+
+await sock.sendMessage(
+chatId,
+{
 react:{
 text:"🔎",
 key:message.key
 }
-});
+}
+);
+
 
 
 
@@ -116,6 +219,8 @@ search.videos[0];
 
 
 
+
+
 await sock.sendMessage(
 chatId,
 {
@@ -126,7 +231,7 @@ url:video.thumbnail
 caption:
 `🎥 *${video.title}*
 
-📥 Downloading...`
+📥 Downloading 1080p...`
 },
 {
 quoted:message
@@ -135,18 +240,16 @@ quoted:message
 
 
 
-const downloadUrl =
-await tornadoDownload(video.url);
 
 
 
-if(!downloadUrl){
-
-throw new Error(
-"No download URL from Tornado"
+const url =
+await tornadoDownload(
+video.url
 );
 
-}
+
+
 
 
 
@@ -154,7 +257,7 @@ await sock.sendMessage(
 chatId,
 {
 video:{
-url:downloadUrl
+url:url
 },
 
 mimetype:
@@ -172,12 +275,18 @@ quoted:message
 
 
 
-await sock.sendMessage(chatId,{
+
+
+await sock.sendMessage(
+chatId,
+{
 react:{
 text:"✅",
 key:message.key
 }
-});
+}
+);
+
 
 
 }
@@ -185,7 +294,7 @@ catch(err){
 
 
 console.log(
-"VIDEO ERROR:",
+"TORNADO ERROR:",
 err.response?.data || err.message
 );
 
@@ -195,8 +304,10 @@ await sock.sendMessage(
 chatId,
 {
 text:
-`❌ Video Download Failed\n\n${
-err.response?.data?.message ||
+`❌ *Video Download Failed*
+
+${
+err.response?.data?.error ||
 err.message
 }`
 },
@@ -208,7 +319,10 @@ quoted:message
 
 }
 
+
 }
+
+
 
 
 module.exports = videoCommand;
