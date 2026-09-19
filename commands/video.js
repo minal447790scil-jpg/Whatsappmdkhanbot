@@ -4,20 +4,35 @@ const fs = require("fs");
 const path = require("path");
 
 
-// Create cookies file from Railway variable
+// CREATE COOKIES FILE
 
-if (process.env.COOKIES_TXT) {
+try {
 
-    fs.writeFileSync(
-        "./cookies.txt",
-        process.env.COOKIES_TXT
+    if (process.env.COOKIES_TXT) {
+
+        fs.writeFileSync(
+            "./cookies.txt",
+            process.env.COOKIES_TXT
+        );
+
+        console.log(
+            "COOKIE CREATED:",
+            process.env.COOKIES_TXT.length
+        );
+
+    } else {
+
+        console.log("NO COOKIES VARIABLE");
+
+    }
+
+}
+catch(err){
+
+    console.log(
+        "COOKIE ERROR:",
+        err.message
     );
-
-    console.log("✅ Cookies file created");
-
-} else {
-
-    console.log("❌ COOKIES_TXT missing");
 
 }
 
@@ -44,7 +59,6 @@ function getText(message){
 
 async function videoCommand(sock, chatId, message){
 
-
 try{
 
 
@@ -63,9 +77,7 @@ return sock.sendMessage(
 chatId,
 {
 text:
-`🎥 Usage:
-
-.video video name`
+"🎥 Usage:\n.video video name"
 },
 {
 quoted:message
@@ -91,25 +103,20 @@ key:message.key
 
 
 
-
-const search =
-await yts(query);
+const search = await yts(query);
 
 
 
 if(!search.videos.length){
 
-throw new Error(
-"No video found"
-);
+throw new Error("Video not found");
 
 }
 
 
 
 
-const video =
-search.videos[0];
+const video = search.videos[0];
 
 
 
@@ -118,17 +125,14 @@ search.videos[0];
 await sock.sendMessage(
 chatId,
 {
-
 image:{
 url:video.thumbnail
 },
 
 caption:
-
 `🎥 *${video.title}*
 
 📥 Downloading...`
-
 },
 {
 quoted:message
@@ -150,7 +154,7 @@ fs.mkdirSync("./videos");
 
 
 console.log(
-"Downloading:",
+"START DOWNLOAD:",
 video.url
 );
 
@@ -170,20 +174,12 @@ format:
 "best[ext=mp4]/best",
 
 
-
 cookies:
 "./cookies.txt",
 
 
-
-js_runtimes:
-"deno",
-
-
-
 no_check_certificates:
 true,
-
 
 
 retries:
@@ -203,10 +199,9 @@ socket_timeout:
 const files =
 fs.readdirSync("./videos")
 .filter(
-file =>
-file.endsWith(".mp4") ||
-file.endsWith(".mkv") ||
-file.endsWith(".webm")
+f =>
+f.endsWith(".mp4") ||
+f.endsWith(".webm")
 );
 
 
@@ -214,11 +209,10 @@ file.endsWith(".webm")
 if(!files.length){
 
 throw new Error(
-"Video file not found"
+"Downloaded file not found"
 );
 
 }
-
 
 
 
@@ -234,7 +228,7 @@ files[files.length-1]
 
 
 console.log(
-"Sending file:",
+"SENDING:",
 filePath
 );
 
@@ -250,7 +244,7 @@ fs.readFileSync(filePath);
 
 
 console.log(
-"Video size:",
+"SIZE:",
 buffer.length
 );
 
@@ -258,39 +252,34 @@ buffer.length
 
 
 
+
 await sock.sendMessage(
-
 chatId,
-
 {
 
-video:
-buffer,
-
+video:buffer,
 
 mimetype:
 "video/mp4",
 
-
 fileName:
 `${video.title}.mp4`,
 
-
 caption:
-
-`🎥 *${video.title}*
-
-✅ Downloaded`
+`🎥 ${video.title}\n\n✅ Downloaded`
 
 },
-
 {
 quoted:message
 }
-
 );
 
 
+
+
+
+
+fs.unlinkSync(filePath);
 
 
 
@@ -306,14 +295,6 @@ key:message.key
 
 
 
-
-
-// delete file after sending
-
-fs.unlinkSync(filePath);
-
-
-
 }
 catch(error){
 
@@ -326,28 +307,20 @@ error
 
 
 await sock.sendMessage(
-
 chatId,
-
 {
-
 text:
-
 `❌ *Video Download Failed*
 
 ${error.message}`
-
 },
-
 {
 quoted:message
 }
-
 );
 
 
 }
-
 
 
 }
