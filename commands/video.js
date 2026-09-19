@@ -1,15 +1,7 @@
-const axios = require("axios");
 const yts = require("yt-search");
-
-
-const PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://pipedapi.adminforge.de",
-    "https://api.piped.projectsegfau.lt",
-    "https://pipedapi.leptons.xyz",
-    "https://piped-api.privacy.com.de"
-];
-
+const { download } = require("krosztube");
+const fs = require("fs");
+const path = require("path");
 
 
 function getText(message){
@@ -28,107 +20,12 @@ function getText(message){
 
 
 
-
-async function getPipedStream(videoId){
-
-
-    for(const base of PIPED_INSTANCES){
-
-
-        try{
-
-
-            console.log(
-                "Trying Piped:",
-                base
-            );
-
-
-
-            const res = await axios.get(
-
-                `${base}/streams/${videoId}`,
-
-                {
-                    timeout:15000,
-
-                    headers:{
-                        "User-Agent":
-                        "Mozilla/5.0"
-                    }
-                }
-
-            );
-
-
-
-            const videos =
-            res.data.videoStreams || [];
-
-
-
-            if(videos.length){
-
-
-                const bestVideo =
-                videos.sort(
-                    (a,b)=>
-                    (b.height || 0) -
-                    (a.height || 0)
-
-                )[0];
-
-
-
-                console.log(
-                    "Piped Success:",
-                    base
-                );
-
-
-
-                return bestVideo.url;
-
-
-            }
-
-
-
-        }
-        catch(err){
-
-
-            console.log(
-
-                "Piped Failed:",
-                base,
-                err.message
-
-            );
-
-
-        }
-
-
-    }
-
-
-    return null;
-
-}
-
-
-
-
-
 async function videoCommand(sock, chatId, message){
-
 
 try{
 
 
 const text = getText(message);
-
 
 
 const query = text
@@ -137,274 +34,175 @@ const query = text
 
 
 
-
 if(!query){
 
-
 return sock.sendMessage(
-
 chatId,
-
 {
 text:
-`🎥 Usage:
-
-.video video name`
+"🎥 Usage:\n.video video name"
 },
-
 {
 quoted:message
 }
-
 );
-
 
 }
 
 
 
-
-
-await sock.sendMessage(
-
-chatId,
-
-{
+await sock.sendMessage(chatId,{
 react:{
 text:"🔎",
 key:message.key
 }
-}
-
-);
+});
 
 
 
-
-
-
-const search =
-await yts(query);
-
-
+const search = await yts(query);
 
 
 if(!search.videos.length){
 
-throw new Error(
-"No video found"
-);
+throw new Error("Video not found");
 
 }
 
 
 
-
-
-const video =
-search.videos[0];
-
+const video = search.videos[0];
 
 
 
 await sock.sendMessage(
-
 chatId,
-
 {
-
 image:{
 url:video.thumbnail
 },
 
-
 caption:
-
 `🎥 *${video.title}*
 
 📥 Downloading...`
-
 },
-
 {
 quoted:message
 }
-
 );
 
 
 
 
 
+const outputDir = "./videos";
 
-// GET STREAM FROM PIPED
+if(!fs.existsSync(outputDir)){
+    fs.mkdirSync(outputDir);
+}
 
-const streamUrl =
-await getPipedStream(
-video.videoId
+
+
+
+const files = await download(
+    video.url,
+    {
+        quality:1080,
+        container:"mp4",
+        outDir:outputDir
+    }
 );
 
 
 
+console.log("KROSZTUBE:",files);
 
 
-if(!streamUrl){
 
+
+const filePath =
+files[0];
+
+
+
+if(!fs.existsSync(filePath)){
 
 throw new Error(
-"Stream not found"
+"Video file not created"
 );
-
 
 }
 
 
 
 
-
-
-// DOWNLOAD VIDEO BUFFER
-
-const response =
-await axios.get(
-
-streamUrl,
-
-{
-
-responseType:
-"arraybuffer",
-
-timeout:
-60000
-
-}
-
-);
-
-
-
-
-
-const videoBuffer =
-Buffer.from(
-response.data
-);
-
-
-
-
-
-if(videoBuffer.length < 10000){
-
-
-throw new Error(
-"Invalid video file"
-);
-
-
-}
-
+const buffer =
+fs.readFileSync(filePath);
 
 
 
 
 
 await sock.sendMessage(
-
 chatId,
-
 {
+video:buffer,
 
-video:
-videoBuffer,
-
-
-mimetype:
-"video/mp4",
-
+mimetype:"video/mp4",
 
 fileName:
 `${video.title}.mp4`,
 
-
 caption:
+`🎥 ${video.title}
 
-`🎥 *${video.title}*
-
-✨ Downloaded by SALMAN KHAN`
-
+✅ Downloaded`
 },
-
-
 {
 quoted:message
 }
-
 );
 
 
 
 
-
-
-await sock.sendMessage(
-
-chatId,
-
-{
+await sock.sendMessage(chatId,{
 react:{
 text:"✅",
 key:message.key
 }
-}
-
-);
-
+});
 
 
 
 }
-
-catch(error){
-
+catch(err){
 
 console.log(
-"VIDEO ERROR:",
-error
+"KROSZTUBE ERROR:",
+err
 );
-
 
 
 await sock.sendMessage(
-
 chatId,
-
 {
-
 text:
+`❌ Video Download Failed
 
-`❌ *Video Download Failed*
-
-${error.message}`
-
+${err.message}`
 },
-
 {
 quoted:message
 }
-
 );
 
 
 }
 
 
-
 }
-
-
-
 
 
 module.exports = videoCommand;
