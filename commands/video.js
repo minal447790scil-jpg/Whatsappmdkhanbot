@@ -1,14 +1,11 @@
-const axios = require("axios");
+const { downloadVideo } = require("@raihan07/vidly");
 const yts = require("yt-search");
-
-
-const BASE_URL = "https://api.tornadoapi.io";
-
+const fs = require("fs");
 
 
 function getText(message){
 
-    let msg = message?.message || {};
+    const msg = message?.message || {};
 
     return (
         msg.conversation ||
@@ -22,147 +19,16 @@ function getText(message){
 
 
 
-
-async function tornadoDownload(youtubeUrl){
-
-
-    // Create download job
-
-    const create = await axios.post(
-        `${BASE_URL}/jobs`,
-        {
-            url: youtubeUrl,
-            quality: "1080"
-        },
-        {
-            headers:{
-                "x-api-key":
-                process.env.TORNADO_API_KEY,
-
-                "Content-Type":
-                "application/json"
-            }
-        }
-    );
-
-
-
-    const jobId =
-    create.data.job_id;
-
-
-
-    console.log(
-        "TORNADO JOB:",
-        jobId
-    );
-
-
-
-    let downloadUrl = null;
-
-
-
-    // Check job status
-
-    for(let i = 0; i < 40; i++){
-
-
-        await new Promise(
-            resolve => setTimeout(resolve,3000)
-        );
-
-
-
-        const status = await axios.get(
-            `${BASE_URL}/jobs/${jobId}`,
-            {
-                headers:{
-                    "x-api-key":
-                    process.env.TORNADO_API_KEY
-                }
-            }
-        );
-
-
-
-        console.log(
-            "TORNADO STATUS:",
-            status.data
-        );
-
-
-
-        const data = status.data;
-
-
-
-        if(
-            data.file_url ||
-            data.download_url ||
-            data.url
-        ){
-
-            downloadUrl =
-            data.file_url ||
-            data.download_url ||
-            data.url;
-
-            break;
-
-        }
-
-
-
-        if(data.status === "failed"){
-
-            throw new Error(
-                "Tornado download failed"
-            );
-
-        }
-
-
-    }
-
-
-
-    if(!downloadUrl){
-
-        throw new Error(
-            "Download timeout"
-        );
-
-    }
-
-
-
-    return downloadUrl;
-
-}
-
-
-
-
-
-
-async function videoCommand(
-    sock,
-    chatId,
-    message
-){
-
+async function videoCommand(sock, chatId, message){
 
 try{
 
 
-const text =
-getText(message);
+const text = getText(message);
 
 
-
-const query =
-text.replace(/^\.video\s*/i,"")
+const query = text
+.replace(/^\.video\s*/i,"")
 .trim();
 
 
@@ -185,22 +51,17 @@ quoted:message
 
 
 
-
-await sock.sendMessage(
-chatId,
-{
+await sock.sendMessage(chatId,{
 react:{
 text:"🔎",
 key:message.key
 }
-}
-);
+});
 
 
 
 
-const search =
-await yts(query);
+const search = await yts(query);
 
 
 
@@ -214,9 +75,7 @@ throw new Error(
 
 
 
-const video =
-search.videos[0];
-
+const video = search.videos[0];
 
 
 
@@ -231,7 +90,7 @@ url:video.thumbnail
 caption:
 `🎥 *${video.title}*
 
-📥 Downloading 1080p...`
+📥 Downloading HD...`
 },
 {
 quoted:message
@@ -242,12 +101,48 @@ quoted:message
 
 
 
+// DOWNLOAD USING VIDLY
 
-const url =
-await tornadoDownload(
+const result =
+await downloadVideo(
 video.url
 );
 
+
+
+console.log(
+"VIDLY RESULT:",
+result
+);
+
+
+
+if(!result.filePath){
+
+throw new Error(
+"Video file not found"
+);
+
+}
+
+
+
+
+const videoBuffer =
+fs.readFileSync(
+result.filePath
+);
+
+
+
+
+if(videoBuffer.length < 10000){
+
+throw new Error(
+"Invalid video file"
+);
+
+}
 
 
 
@@ -256,12 +151,13 @@ video.url
 await sock.sendMessage(
 chatId,
 {
-video:{
-url:url
-},
+video:videoBuffer,
 
 mimetype:
 "video/mp4",
+
+fileName:
+`${video.title}.mp4`,
 
 caption:
 `🎥 *${video.title}*
@@ -276,26 +172,22 @@ quoted:message
 
 
 
-
-await sock.sendMessage(
-chatId,
-{
+await sock.sendMessage(chatId,{
 react:{
 text:"✅",
 key:message.key
 }
-}
-);
+});
 
 
 
 }
-catch(err){
+catch(error){
 
 
 console.log(
-"TORNADO ERROR:",
-err.response?.data || err.message
+"VIDLY ERROR:",
+error
 );
 
 
@@ -306,10 +198,7 @@ chatId,
 text:
 `❌ *Video Download Failed*
 
-${
-err.response?.data?.error ||
-err.message
-}`
+${error.message}`
 },
 {
 quoted:message
@@ -319,9 +208,7 @@ quoted:message
 
 }
 
-
 }
-
 
 
 
