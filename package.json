@@ -22,6 +22,8 @@
      "axios": "^1.8.4",
     "@distube/ytdl-core": "latest",
     "@raihan07/vidly": "latest",
+    "fallen-yt": "^1.0.2",
+    "iguro-ytdl": "^1.0.2",
     
     "trs-media-downloader": "^1.0.0",
     "cheerio": "^1.2.0",
