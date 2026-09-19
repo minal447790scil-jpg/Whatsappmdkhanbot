@@ -1,376 +1,389 @@
+const axios = require("axios");
 const yts = require("yt-search");
-const ytdlp = require("youtube-dl-exec");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-const ffmpeg = require("ffmpeg-static");
 
-const YTDLP_COMMON = {
-    jsRuntimes: "deno",
-    remoteComponents: "ejs:github",
-    noPlaylist: true,
-    noWarnings: false,
-    socketTimeout: 60,
-    retries: 2
-};
+const TUNELIO_API_KEY = process.env.TUNELIO_API_KEY;
 
 
+// ===============================
+// GET TEXT FROM BAILEYS
+// ===============================
+function getText(message) {
+
+    let msg = message?.message || message;
+
+    if (!msg) return "";
+
+    if (msg.ephemeralMessage?.message)
+        msg = msg.ephemeralMessage.message;
+
+    if (msg.viewOnceMessage?.message)
+        msg = msg.viewOnceMessage.message;
+
+    if (msg.viewOnceMessageV2?.message)
+        msg = msg.viewOnceMessageV2.message;
+
+
+    return (
+        msg.conversation ||
+        msg.extendedTextMessage?.text ||
+        msg.imageMessage?.caption ||
+        msg.videoMessage?.caption ||
+        msg.documentMessage?.caption ||
+        ""
+    ).trim();
+}
+
+
+
+// ===============================
+// VIDEO COMMAND
+// ===============================
 async function videoCommand(sock, chatId, message) {
-
-    let filePath = null;
 
     try {
 
-        // =========================
-        // REACTIONS
-        // =========================
 
-        for (const emoji of ["📥", "⏳", "🎥"]) {
-
-            try {
-                await sock.sendMessage(chatId, {
-                    react: {
-                        text: emoji,
-                        key: message.key
-                    }
-                });
-            } catch {}
-        }
-
-
-        // =========================
-        // MESSAGE
-        // =========================
-
-        const messageContent =
-            message.message?.ephemeralMessage?.message ||
-            message.message?.viewOnceMessage?.message ||
-            message.message?.viewOnceMessageV2?.message ||
-            message.message;
-
-        const text = (
-            messageContent?.conversation ||
-            messageContent?.extendedTextMessage?.text ||
-            messageContent?.imageMessage?.caption ||
-            messageContent?.videoMessage?.caption ||
-            ""
-        ).trim();
-
-
-        const query = text
-            .replace(/^\.video\s*/i, "")
-            .trim();
-
-
-        if (!query) {
-
-            await sock.sendMessage(
-                chatId,
-                {
-                    text:
-                        "🎥 *Video Downloader*\n\n" +
-                        "Usage:\n" +
-                        ".video <video name or YouTube link>"
-                },
-                {
-                    quoted: message
-                }
-            );
-
-            return;
-        }
-
-
-        // =========================
-        // SEARCH
-        // =========================
-
-        let url;
-        let title = "YouTube Video";
-        let thumbnail = "";
-        let duration = "Unknown";
-
-
-        if (
-            query.includes("youtube.com") ||
-            query.includes("youtu.be")
-        ) {
-
-            url = query;
-
-            try {
-
-                const info = await ytdlp(url, {
-
-                    ...YTDLP_COMMON,
-
-                    dumpSingleJson: true,
-
-                    skipDownload: true
-
-                });
-
-                title =
-                    info.title ||
-                    title;
-
-                thumbnail =
-                    info.thumbnail ||
-                    "";
-
-                duration =
-                    info.duration_string ||
-                    "Unknown";
-
-            } catch (err) {
-
-                console.log(
-                    "[VIDEO INFO ERROR]",
-                    err.message
-                );
-            }
-
-        } else {
-
-            const search =
-                await yts(query);
-
-
-            if (!search?.videos?.length) {
-
-                await sock.sendMessage(
-                    chatId,
-                    {
-                        text:
-                            "❌ No video found."
-                    },
-                    {
-                        quoted: message
-                    }
-                );
-
-                return;
-            }
-
-
-            const video =
-                search.videos[0];
-
-
-            url = video.url;
-
-            title =
-                video.title;
-
-            thumbnail =
-                video.thumbnail || "";
-
-            duration =
-                video.timestamp ||
-                "Unknown";
-        }
-
-
-        // =========================
-        // PREVIEW
-        // =========================
-
-        if (thumbnail) {
-
-            await sock.sendMessage(
-                chatId,
-                {
-                    image: {
-                        url: thumbnail
-                    },
-
-                    caption:
-                        `🎥 *${title}*\n` +
-                        `⏱️ *${duration}*\n\n` +
-                        `📥 Downloading video...`
-                },
-                {
-                    quoted: message
-                }
-            );
-
-        } else {
-
-            await sock.sendMessage(
-                chatId,
-                {
-                    text:
-                        `🎥 *${title}*\n` +
-                        `⏱️ *${duration}*\n\n` +
-                        `📥 Downloading video...`
-                },
-                {
-                    quoted: message
-                }
-            );
-        }
-
-
-        // =========================
-        // TEMP FILE
-        // =========================
-
-        filePath = path.join(
-            os.tmpdir(),
-            `video_${Date.now()}.mp4`
-        );
+        const text = getText(message);
 
 
         console.log(
-            "[VIDEO] Downloading:",
+            "VIDEO TEXT:",
+            text
+        );
+
+
+
+        const query = text
+            .replace(/^\.video\s*/i,"")
+            .trim();
+
+
+
+        if(!query){
+
+            return await sock.sendMessage(
+                chatId,
+                {
+                    text:
+`🎥 *Video Downloader*
+
+Usage:
+.video video name
+
+Example:
+.video Dil Dil Pakistan`
+                },
+                {
+                    quoted:message
+                }
+            );
+
+        }
+
+
+
+        if(!TUNELIO_API_KEY){
+
+            throw new Error(
+                "TUNELIO_API_KEY missing"
+            );
+
+        }
+
+
+
+
+        // SEARCH
+
+        await sock.sendMessage(chatId,{
+            react:{
+                text:"🔎",
+                key:message.key
+            }
+        });
+
+
+
+        const search =
+            await yts(query);
+
+
+
+        if(!search.videos.length){
+
+            throw new Error(
+                "Video not found"
+            );
+
+        }
+
+
+
+        const video =
+            search.videos[0];
+
+
+        const url =
+            video.url;
+
+
+        const title =
+            video.title;
+
+
+        const thumbnail =
+            video.thumbnail;
+
+
+        const duration =
+            video.timestamp || "Unknown";
+
+
+
+
+
+        // PREVIEW
+
+
+        await sock.sendMessage(
+            chatId,
+            {
+
+                image:{
+                    url:thumbnail
+                },
+
+                caption:
+`🎥 *${title}*
+
+⏱️ ${duration}
+
+📥 Downloading...`
+
+            },
+            {
+                quoted:message
+            }
+        );
+
+
+
+
+
+        // API REQUEST
+
+
+        console.log(
+            "Sending video to Tunelio:",
             url
         );
 
 
-        // =========================
-        // DOWNLOAD
-        // =========================
 
-        await ytdlp(url, {
+        const response =
+            await axios.post(
 
-            ...YTDLP_COMMON,
+                "https://tunelio.dev/create",
 
-            format:
-                "bestvideo+bestaudio/best",
+                {
+                    url:url,
 
-            mergeOutputFormat:
-                "mp4",
+                    quality:"720p"
+                },
 
-            output:
-                filePath,
+                {
 
-            ffmpegLocation:
-                ffmpeg,
+                    headers:{
 
-            extractorArgs:
-                "youtube:player_client=web_safari"
-        });
+                        Authorization:
+                        `Bearer ${TUNELIO_API_KEY}`,
+
+                        "Content-Type":
+                        "application/json"
+
+                    },
+
+                    timeout:120000
+                }
+            );
 
 
-        // =========================
-        // CHECK
-        // =========================
 
-        if (!fs.existsSync(filePath)) {
+
+        console.log(
+            "TUNELIO VIDEO RESPONSE:",
+            response.data
+        );
+
+
+
+
+        const downloadUrl =
+
+            response.data?.url ||
+
+            response.data?.download_url ||
+
+            response.data?.downloadUrl ||
+
+            response.data?.data?.url ||
+
+            response.data?.data?.download_url ||
+
+            response.data?.result?.url;
+
+
+
+
+        if(!downloadUrl){
 
             throw new Error(
-                "MP4 file was not created."
+                "No video URL received from Tunelio"
             );
+
         }
 
 
-        const stats =
-            fs.statSync(filePath);
 
 
-        if (stats.size < 10000) {
 
-            throw new Error(
-                "Downloaded video file is too small."
+        // DOWNLOAD VIDEO
+
+
+        const videoResponse =
+            await axios.get(
+                downloadUrl,
+                {
+
+                    responseType:
+                    "arraybuffer",
+
+                    timeout:300000,
+
+                    maxContentLength:
+                    300 * 1024 * 1024,
+
+                    maxBodyLength:
+                    300 * 1024 * 1024
+                }
             );
-        }
+
 
 
         const videoBuffer =
-            fs.readFileSync(filePath);
+            Buffer.from(
+                videoResponse.data
+            );
 
 
-        // =========================
-        // SAFE NAME
-        // =========================
-
-        const safeTitle =
-            title
-                .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
-                .replace(/\s+/g, " ")
-                .trim()
-                .substring(0, 80) ||
-            "video";
 
 
-        // =========================
-        // SEND
-        // =========================
+        if(!videoBuffer.length){
+
+            throw new Error(
+                "Empty video file"
+            );
+
+        }
+
+
+
+
+
+        // SEND VIDEO
+
 
         await sock.sendMessage(
             chatId,
             {
 
                 video:
-                    videoBuffer,
+                videoBuffer,
 
                 mimetype:
-                    "video/mp4",
+                "video/mp4",
 
                 fileName:
-                    `${safeTitle}.mp4`,
+                `${title}.mp4`,
 
                 caption:
-                    `🎥 *${title}*\n` +
-                    `⏱️ *Duration:* ${duration}\n\n` +
-                    `> *Downloaded by SALMAN KHAN*`
+`🎥 *${title}*
+
+⏱️ ${duration}
+
+✅ Downloaded successfully`,
+
+
+                contextInfo:{
+
+                    externalAdReply:{
+
+                        title:title,
+
+                        body:
+                        "🎥 Video Downloader",
+
+                        thumbnailUrl:
+                        thumbnail,
+
+                        mediaType:2,
+
+                        renderLargerThumbnail:true,
+
+                        sourceUrl:url
+
+                    }
+
+                }
+
             },
             {
-                quoted: message
+                quoted:message
             }
         );
 
 
-        // =========================
-        // SUCCESS
-        // =========================
 
-        await sock.sendMessage(chatId, {
-            react: {
-                text: "✅",
-                key: message.key
+
+
+        await sock.sendMessage(chatId,{
+            react:{
+                text:"✅",
+                key:message.key
             }
         });
 
 
+
+    } catch(error){
+
+
         console.log(
-            "[VIDEO] Successfully sent"
+            "VIDEO ERROR:",
+            error.response?.data ||
+            error.message
         );
 
-
-    } catch (error) {
-
-        console.error(
-            "[VIDEO ERROR]",
-            error
-        );
 
 
         await sock.sendMessage(
             chatId,
             {
+
                 text:
-                    `❌ *Video Download Failed*\n\n` +
-                    `${error.message}`
+`❌ *Video Download Failed*
+
+${error.response?.data?.message || error.message}`
+
             },
             {
-                quoted: message
+                quoted:message
             }
         );
 
 
-    } finally {
-
-        if (
-            filePath &&
-            fs.existsSync(filePath)
-        ) {
-
-            try {
-                fs.unlinkSync(filePath);
-            } catch {}
-        }
     }
+
 }
 
 
