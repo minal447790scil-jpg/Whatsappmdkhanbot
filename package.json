@@ -20,6 +20,7 @@
     "axios": "^1.6.0",
      "axios": "^1.8.4",
     "@distube/ytdl-core": "latest",
+    "@raihan07/vidly": "latest",
     
     "trs-media-downloader": "^1.0.0",
     "cheerio": "^1.2.0",
