@@ -1,11 +1,13 @@
 const ytdl = require("@pontalabs/ytdl");
 const yts = require("yt-search");
-
+const axios = require("axios");
 
 
 function getText(message){
 
-    const msg = message?.message || {};
+    let msg = message?.message || message;
+
+    if(!msg) return "";
 
     return (
         msg.conversation ||
@@ -19,14 +21,12 @@ function getText(message){
 
 
 
-
 async function videoCommand(sock, chatId, message){
 
 try{
 
 
 const text = getText(message);
-
 
 const query = text
 .replace(/^\.video\s*/i,"")
@@ -39,8 +39,7 @@ if(!query){
 return sock.sendMessage(
 chatId,
 {
-text:
-"🎥 Use:\n.video video name"
+text:"🎥 Use:\n.video video name"
 },
 {
 quoted:message
@@ -52,56 +51,29 @@ quoted:message
 
 
 
-
-await sock.sendMessage(
-chatId,
-{
-react:{
-text:"🔎",
-key:message.key
-}
-}
-);
-
-
-
-
-
-const search =
-await yts(query);
-
+const search = await yts(query);
 
 
 if(!search.videos.length){
 
-throw new Error(
-"No video found"
-);
+throw new Error("Video not found");
 
 }
 
 
 
-const video =
-search.videos[0];
-
-
+const video = search.videos[0];
 
 
 
 await sock.sendMessage(
 chatId,
 {
-
 image:{
 url:video.thumbnail
 },
-
 caption:
-`🎥 *${video.title}*
-
-📥 Downloading...`
-
+`🎥 *${video.title}*\n\n⏳ Downloading...`
 },
 {
 quoted:message
@@ -112,86 +84,58 @@ quoted:message
 
 
 
-
-// YTDL STREAM
-
-const stream =
-ytdl(video.url, {
-
-quality:"highestvideo"
-
-});
-
-
-
-
-
-const chunks = [];
-
-
-
-stream.on(
-"data",
-(chunk)=>{
-
-chunks.push(chunk);
-
-});
-
-
-
-
-
-stream.on(
-"end",
-async()=>{
-
-
-const buffer =
-Buffer.concat(chunks);
-
-
-
-console.log(
-"VIDEO SIZE:",
-buffer.length
+// SAME PACKAGE METHOD
+const result = await ytdl.downloadVideo(
+    video.url,
+    720
 );
 
 
 
-if(buffer.length < 10000){
+const videoUrl =
+result?.download?.downloadUrl ||
+result?.downloadUrl ||
+result?.url;
+
+
+
+if(!videoUrl){
 
 throw new Error(
-"Invalid video buffer"
+"No video URL found from ytdl"
 );
 
 }
 
+
+
+
+const response = await axios.get(
+videoUrl,
+{
+responseType:"arraybuffer",
+timeout:180000
+}
+);
+
+
+
+const buffer = Buffer.from(response.data);
 
 
 
 await sock.sendMessage(
-
 chatId,
-
 {
-
 video:buffer,
-
 mimetype:"video/mp4",
-
-fileName:
-`${video.title}.mp4`,
-
+fileName:`${video.title}.mp4`,
 caption:
-`✅ *${video.title}*`
-
+`🎥 *${video.title}*\n\n✅ Downloaded`
 },
-
 {
 quoted:message
 }
-
 );
 
 
@@ -208,51 +152,30 @@ key:message.key
 
 
 
-});
-
-
-
-stream.on(
-"error",
-(err)=>{
-
-throw err;
-
-});
-
-
-
-
-
 }
-catch(error){
-
+catch(err){
 
 console.log(
-"YTDL ERROR:",
-error
+"VIDEO ERROR:",
+err
 );
-
 
 
 await sock.sendMessage(
 chatId,
 {
 text:
-`❌ Video Failed\n\n${error.message}`
+`❌ Video Failed\n\n${err.message}`
 },
 {
 quoted:message
 }
 );
 
-
 }
 
 
-
 }
-
 
 
 module.exports = videoCommand;
