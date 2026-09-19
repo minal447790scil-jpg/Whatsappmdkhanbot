@@ -32,14 +32,12 @@ function getText(message) {
 }
 
 
-
 // ===============================
 // VIDEO COMMAND
 // ===============================
 async function videoCommand(sock, chatId, message) {
 
     try {
-
 
         const text = getText(message);
 
@@ -68,13 +66,12 @@ Usage:
 .video video name
 
 Example:
-.video Dil Dil Pakistan`
+.video Tum Hi Ho`
                 },
                 {
                     quoted: message
                 }
             );
-
         }
 
 
@@ -88,7 +85,7 @@ Example:
 
 
 
-        // SEARCH YOUTUBE
+        // SEARCH VIDEO
 
         const search =
             await yts(query);
@@ -98,9 +95,8 @@ Example:
         if (!search.videos.length) {
 
             throw new Error(
-                "Video not found"
+                "No video found"
             );
-
         }
 
 
@@ -109,6 +105,8 @@ Example:
             search.videos[0];
 
 
+
+        // PREVIEW
 
         await sock.sendMessage(
             chatId,
@@ -131,7 +129,6 @@ Example:
 
 
 
-
         await sock.sendMessage(chatId,{
             react:{
                 text:"⏳",
@@ -143,37 +140,67 @@ Example:
 
 
         // ===============================
-        // DIRECT HD STREAM
+        // DOWNLOAD HD STREAM
         // ===============================
 
-        const stream =
-            ytdl(video.url, {
 
+        const stream = ytdl(
+            video.url,
+            {
                 quality:"highest",
 
                 filter:
                 "audioandvideo"
+            }
+        );
 
-            });
+
+
+        const chunks = [];
 
 
 
-        // ===============================
+        for await (const chunk of stream) {
+
+            chunks.push(chunk);
+
+        }
+
+
+
+        const videoBuffer =
+            Buffer.concat(chunks);
+
+
+
+        if (!videoBuffer.length) {
+
+            throw new Error(
+                "Video buffer empty"
+            );
+        }
+
+
+
+
         // SEND VIDEO
-        // ===============================
 
 
         await sock.sendMessage(
             chatId,
             {
 
-                video: stream,
+                video:
+                videoBuffer,
+
 
                 mimetype:
                 "video/mp4",
 
+
                 fileName:
                 `${video.title}.mp4`,
+
 
                 caption:
 `🎥 *${video.title}*
@@ -185,7 +212,6 @@ Example:
                 quoted:message
             }
         );
-
 
 
 
@@ -208,6 +234,7 @@ Example:
         );
 
 
+
         await sock.sendMessage(
             chatId,
             {
@@ -224,7 +251,6 @@ ${error.message}`
     }
 
 }
-
 
 
 module.exports = videoCommand;
