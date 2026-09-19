@@ -2,32 +2,50 @@ const ytdl = require("@pontalabs/ytdl");
 const yts = require("yt-search");
 const axios = require("axios");
 
+const ffmpeg = require("fluent-ffmpeg");
+const ffmpegPath = require("ffmpeg-static");
+
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
+
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+
 
 function getText(message){
 
-    let msg = message?.message || message;
+let msg=message?.message || message;
 
-    if(!msg) return "";
+if(!msg) return "";
 
-    if(msg.ephemeralMessage?.message)
-        msg = msg.ephemeralMessage.message;
+if(msg.ephemeralMessage?.message)
+msg=msg.ephemeralMessage.message;
 
-    if(msg.viewOnceMessage?.message)
-        msg = msg.viewOnceMessage.message;
+if(msg.viewOnceMessage?.message)
+msg=msg.viewOnceMessage.message;
 
 
-    return (
-        msg.conversation ||
-        msg.extendedTextMessage?.text ||
-        msg.imageMessage?.caption ||
-        msg.videoMessage?.caption ||
-        ""
-    ).trim();
+return (
+msg.conversation ||
+msg.extendedTextMessage?.text ||
+msg.imageMessage?.caption ||
+msg.videoMessage?.caption ||
+""
+).trim();
+
 }
 
 
 
+
 async function videoCommand(sock,chatId,message){
+
+
+let input;
+let output;
+
 
 try{
 
@@ -58,6 +76,7 @@ quoted:message
 
 
 
+
 const search=await yts(query);
 
 
@@ -72,7 +91,9 @@ throw new Error(
 
 
 
+
 const video=search.videos[0];
+
 
 
 
@@ -86,7 +107,7 @@ url:video.thumbnail
 caption:
 `🎥 *${video.title}*
 
-📥 Downloading...`
+⏳ Downloading...`
 },
 {
 quoted:message
@@ -95,7 +116,9 @@ quoted:message
 
 
 
-const result=
+
+
+const result =
 await ytdl.downloadVideo(
 video.url,
 720
@@ -103,14 +126,7 @@ video.url,
 
 
 
-console.log(
-"YTDL VIDEO:",
-result
-);
-
-
-
-const videoUrl=
+const videoUrl =
 result?.download?.downloadUrl;
 
 
@@ -118,14 +134,16 @@ result?.download?.downloadUrl;
 if(!videoUrl){
 
 throw new Error(
-"No video URL received"
+"No video URL found"
 );
 
 }
 
 
 
-const file=
+
+
+const raw =
 await axios.get(
 videoUrl,
 {
@@ -136,17 +154,92 @@ timeout:300000
 
 
 
+
+
+input =
+path.join(
+os.tmpdir(),
+`raw_${Date.now()}.mp4`
+);
+
+
+
+output =
+path.join(
+os.tmpdir(),
+`final_${Date.now()}.mp4`
+);
+
+
+
+
+
+fs.writeFileSync(
+input,
+Buffer.from(raw.data)
+);
+
+
+
+
+
+// WhatsApp compatible convert
+
+await new Promise((resolve,reject)=>{
+
+
+ffmpeg(input)
+
+.videoCodec("libx264")
+
+.audioCodec("aac")
+
+.outputOptions([
+"-preset veryfast",
+"-movflags +faststart",
+"-pix_fmt yuv420p"
+])
+
+.save(output)
+
+
+.on("end",resolve)
+
+.on("error",reject);
+
+
+
+});
+
+
+
+
+
+const finalVideo =
+fs.readFileSync(output);
+
+
+
+
+
+
 await sock.sendMessage(
 chatId,
 {
+
 video:
-Buffer.from(file.data),
+finalVideo,
 
 mimetype:
 "video/mp4",
 
 fileName:
-`${video.title}.mp4`
+`${video.title}.mp4`,
+
+caption:
+`🎥 *${video.title}*
+
+✨ Downloaded by SALMAN KHAN`
 
 },
 {
@@ -156,12 +249,23 @@ quoted:message
 
 
 
+
+
+await sock.sendMessage(chatId,{
+react:{
+text:"✅",
+key:message.key
 }
-catch(error){
+});
+
+
+
+}
+catch(err){
 
 console.log(
-"VIDEO ERROR:",
-error
+"VIDEO ERROR",
+err
 );
 
 
@@ -171,7 +275,7 @@ chatId,
 text:
 `❌ *Video Download Failed*
 
-${error.message}`
+${err.message}`
 },
 {
 quoted:message
@@ -179,6 +283,27 @@ quoted:message
 );
 
 }
+
+
+
+finally{
+
+
+try{
+
+if(input && fs.existsSync(input))
+fs.unlinkSync(input);
+
+
+if(output && fs.existsSync(output))
+fs.unlinkSync(output);
+
+
+}catch(e){}
+
+
+}
+
 
 }
 
