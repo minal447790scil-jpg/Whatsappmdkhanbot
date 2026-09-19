@@ -1,12 +1,8 @@
-const axios = require("axios");
 const yts = require("yt-search");
-
-const APIFY_TOKEN = process.env.APIFY_TOKEN || "apify_api_TwoTejauOK2ur2cAKYwrOUAiE5wIcC2IcAKU";
-
-console.log(
-    "APIFY TOKEN:",
-    APIFY_TOKEN ? APIFY_TOKEN.slice(0, 10) : "MISSING"
-);
+const ytdl = require("yt-direct");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
 // ===============================
 // GET TEXT
@@ -21,78 +17,6 @@ function getText(message) {
         msg.videoMessage?.caption ||
         ""
     ).trim();
-}
-
-// ===============================
-// APIFY DOWNLOAD
-// ===============================
-async function downloadWithApify(youtubeUrl, sock, chatId, message) {
-    try {
-        if (!APIFY_TOKEN) {
-            throw new Error("APIFY_TOKEN missing");
-        }
-
-        const response = await axios.post(
-            `https://api.apify.com/v2/acts/memo23~youtube-video-downloader/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
-            {
-                videoUrls: [youtubeUrl]
-            },
-            { timeout: 180000 }
-        );
-
-        const data = response.data?.[0];
-
-        if (!data) {
-            throw new Error("Apify returned empty response");
-        }
-
-        if (data.error || data.status === "FAILED") {
-            throw new Error(data.error || "Apify actor failed");
-        }
-
-        let downloadUrl =
-            data.downloadUrl ||
-            data.download_url ||
-            data.videoUrl ||
-            data.video_url ||
-            data.url ||
-            data.fileUrl ||
-            data.file_url;
-
-        if (!downloadUrl) {
-            throw new Error("Download URL not found in Apify response");
-        }
-
-        // 🔥 Apify Key-Value Store URL ke saath token lagao
-        if (downloadUrl.includes("api.apify.com")) {
-            const separator = downloadUrl.includes("?") ? "&" : "?";
-            downloadUrl = `${downloadUrl}${separator}token=${APIFY_TOKEN}`;
-        }
-
-        // 🔥 Debug: URL bhejo
-        await sock.sendMessage(
-            chatId,
-            {
-                text: "🔗 Download URL:\n\n" + downloadUrl
-            },
-            { quoted: message }
-        );
-
-        return downloadUrl;
-
-    } catch (error) {
-        await sock.sendMessage(
-            chatId,
-            {
-                text: "❌ APIFY ERROR:\n\n" +
-                    (error.response?.data
-                        ? JSON.stringify(error.response.data, null, 2).slice(0, 3000)
-                        : error.message)
-            },
-            { quoted: message }
-        );
-        return null;
-    }
 }
 
 // ===============================
@@ -135,7 +59,7 @@ async function videoCommand(sock, chatId, message) {
             chatId,
             {
                 image: { url: video.thumbnail },
-                caption: `🎥 *${video.title}*\n\n📥 Downloading from Apify...`
+                caption: `🎥 *${video.title}*\n\n📥 Downloading...`
             },
             { quoted: message }
         );
@@ -147,27 +71,24 @@ async function videoCommand(sock, chatId, message) {
             }
         });
 
-        const url = await downloadWithApify(video.url, sock, chatId, message);
-
-        if (!url) {
-            throw new Error("Apify URL missing");
-        }
-
-        const file = await axios.get(url, {
-            responseType: "arraybuffer",
-            timeout: 180000,
-            maxContentLength: 200 * 1024 * 1024,
-            maxBodyLength: 200 * 1024 * 1024,
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
+        // 🔥 yt-direct se download
+        const videoResult = await ytdl(video.url, {
+            quality: "720p",
+            format: "mp4",
+            filter: "audioandvideo",
+            timeout: 30000,
+            retries: 3
         });
 
-        const buffer = Buffer.from(file.data);
+        const outputPath = path.join(os.tmpdir(), `video_${Date.now()}.mp4`);
 
-        if (!buffer.length) {
-            throw new Error("Downloaded file is empty");
-        }
+        await videoResult.download(outputPath);
+
+        const buffer = fs.readFileSync(outputPath);
+
+        try {
+            fs.unlinkSync(outputPath);
+        } catch (e) {}
 
         await sock.sendMessage(
             chatId,
@@ -188,7 +109,7 @@ async function videoCommand(sock, chatId, message) {
         });
 
     } catch (error) {
-        console.log("VIDEO ERROR:", error?.response?.data || error.message);
+        console.log("VIDEO ERROR:", error.message);
 
         await sock.sendMessage(
             chatId,
