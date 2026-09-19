@@ -2,6 +2,17 @@ const ytdl = require("@pontalabs/ytdl");
 const yts = require("yt-search");
 const axios = require("axios");
 
+const ffmpeg = require("fluent-ffmpeg");
+const ffmpegPath = require("ffmpeg-static");
+
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+
+
 function getText(message) {
 
     let msg = message?.message || message;
@@ -29,7 +40,13 @@ function getText(message) {
 
 
 
+
 async function videoCommand(sock, chatId, message) {
+
+
+let inputFile;
+let outputFile;
+
 
 try {
 
@@ -49,10 +66,7 @@ return sock.sendMessage(
 chatId,
 {
 text:
-`🎥 *Video Downloader*
-
-Use:
-.video video name`
+"🎥 Usage:\n.video video name"
 },
 {
 quoted:message
@@ -63,12 +77,14 @@ quoted:message
 
 
 
+
 await sock.sendMessage(chatId,{
 react:{
 text:"🔎",
 key:message.key
 }
 });
+
 
 
 
@@ -87,6 +103,8 @@ throw new Error(
 
 
 const video = search.videos[0];
+
+
 
 
 
@@ -111,49 +129,33 @@ quoted:message
 
 
 
-// PONTALABS MP4 TRY
+// PONTALABS DOWNLOAD
 
 
-let result;
-
-
-try {
-
-result = await ytdl.downloadVideo(
-    video.url,
-    "720p"
+const result =
+await ytdl.downloadVideo(
+video.url,
+720
 );
-
-
-} catch(e){
-
-
-result = await ytdl.downloadVideo(
-    video.url,
-    720
-);
-
-
-}
 
 
 
 console.log(
-"PONTALABS:",
+"YTDL RESULT:",
 result
 );
 
 
 
-const url =
+const downloadUrl =
 result?.download?.downloadUrl;
 
 
 
-if(!url){
+if(!downloadUrl){
 
 throw new Error(
-"No MP4 URL received"
+"No download URL"
 );
 
 }
@@ -162,9 +164,12 @@ throw new Error(
 
 
 
+// Download file
+
+
 const response =
 await axios.get(
-url,
+downloadUrl,
 {
 responseType:"arraybuffer",
 timeout:300000
@@ -190,11 +195,73 @@ throw new Error(
 
 
 
+// TEMP FILES
+
+
+inputFile =
+path.join(
+os.tmpdir(),
+`input_${Date.now()}.mp4`
+);
+
+
+outputFile =
+path.join(
+os.tmpdir(),
+`output_${Date.now()}.mp4`
+);
+
+
+
+
+fs.writeFileSync(
+inputFile,
+buffer
+);
+
+
+
+
+
+// ONLY REMUX (NO CONVERSION)
+
+
+await new Promise((resolve,reject)=>{
+
+
+ffmpeg(inputFile)
+
+.outputOptions([
+"-c copy",
+"-movflags +faststart"
+])
+
+.save(outputFile)
+
+.on("end",resolve)
+
+.on("error",reject);
+
+
+});
+
+
+
+
+
+const finalVideo =
+fs.readFileSync(outputFile);
+
+
+
+
+
 await sock.sendMessage(
 chatId,
 {
 
-video:buffer,
+video:
+finalVideo,
 
 mimetype:
 "video/mp4",
@@ -212,6 +279,8 @@ caption:
 quoted:message
 }
 );
+
+
 
 
 
@@ -251,8 +320,28 @@ quoted:message
 
 }
 
+finally{
+
+
+try{
+
+if(inputFile && fs.existsSync(inputFile))
+fs.unlinkSync(inputFile);
+
+
+if(outputFile && fs.existsSync(outputFile))
+fs.unlinkSync(outputFile);
+
+
+}catch(e){}
+
 
 }
+
+
+
+}
+
 
 
 module.exports = videoCommand;
