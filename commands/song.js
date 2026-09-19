@@ -3,6 +3,16 @@ const ytdlp = require("youtube-dl-exec");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const ffmpeg = require("ffmpeg-static");
+
+const YTDLP_COMMON = {
+    jsRuntimes: "deno",
+    remoteComponents: "ejs:github",
+    noPlaylist: true,
+    noWarnings: false,
+    socketTimeout: 60,
+    retries: 2
+};
 
 async function songCommand(sock, chatId, message) {
 
@@ -10,170 +20,343 @@ async function songCommand(sock, chatId, message) {
 
     try {
 
-        // reactions
-        for (const emoji of ["📥","⏳","🎵"]) {
-            await sock.sendMessage(chatId,{
-                react:{
-                    text:emoji,
-                    key:message.key
+        // =========================
+        // REACTIONS
+        // =========================
+
+        for (const emoji of ["📥", "⏳", "🎵"]) {
+
+            try {
+                await sock.sendMessage(chatId, {
+                    react: {
+                        text: emoji,
+                        key: message.key
+                    }
+                });
+            } catch {}
+        }
+
+
+        // =========================
+        // MESSAGE TEXT
+        // =========================
+
+        const messageContent =
+            message.message?.ephemeralMessage?.message ||
+            message.message?.viewOnceMessage?.message ||
+            message.message?.viewOnceMessageV2?.message ||
+            message.message;
+
+        const text = (
+            messageContent?.conversation ||
+            messageContent?.extendedTextMessage?.text ||
+            messageContent?.imageMessage?.caption ||
+            messageContent?.videoMessage?.caption ||
+            ""
+        ).trim();
+
+
+        const query = text
+            .replace(/^\.song\s*/i, "")
+            .trim();
+
+
+        if (!query) {
+
+            await sock.sendMessage(
+                chatId,
+                {
+                    text:
+                        "🎵 *Song Downloader*\n\n" +
+                        "Usage:\n" +
+                        ".song <song name or YouTube link>"
+                },
+                {
+                    quoted: message
                 }
-            });
+            );
+
+            return;
         }
 
 
-        const text =
-            message.message?.conversation ||
-            message.message?.extendedTextMessage?.text ||
-            "";
-
-
-        const query = text.replace(/^\.song\s*/i,"").trim();
-
-
-        if(!query){
-            return sock.sendMessage(chatId,{
-                text:"❌ Use:\n.song <song name>"
-            },{
-                quoted:message
-            });
-        }
-
+        // =========================
+        // SEARCH / URL
+        // =========================
 
         let url;
-        let title;
-        let thumbnail;
+        let title = "YouTube Song";
+        let thumbnail = "";
+        let duration = "Unknown";
 
 
-        if(query.includes("youtube.com") || query.includes("youtu.be")){
+        if (
+            query.includes("youtube.com") ||
+            query.includes("youtu.be")
+        ) {
 
-            url=query;
+            url = query;
 
-            const info = await ytdlp(url,{
-                dumpSingleJson:true,
-                noPlaylist:true,
-                extractorArgs:"youtube:player_client=android"
-            });
+            try {
 
-            title=info.title;
-            thumbnail=info.thumbnail;
+                const info = await ytdlp(url, {
+                    ...YTDLP_COMMON,
+                    dumpSingleJson: true,
+                    skipDownload: true
+                });
+
+                title = info.title || title;
+                thumbnail = info.thumbnail || "";
+                duration = info.duration_string || "Unknown";
+
+            } catch (err) {
+
+                console.log(
+                    "[SONG INFO ERROR]",
+                    err.message
+                );
+
+            }
+
+        } else {
+
+            const search = await yts(query);
+
+            if (!search?.videos?.length) {
+
+                await sock.sendMessage(
+                    chatId,
+                    {
+                        text: "❌ No song found."
+                    },
+                    {
+                        quoted: message
+                    }
+                );
+
+                return;
+            }
 
 
-        }else{
+            const video = search.videos[0];
 
-            const search=await yts(query);
-
-            if(!search.videos.length)
-                throw new Error("Song not found");
-
-
-            const video=search.videos[0];
-
-            url=video.url;
-            title=video.title;
-            thumbnail=video.thumbnail;
-
+            url = video.url;
+            title = video.title;
+            thumbnail = video.thumbnail || "";
+            duration = video.timestamp || "Unknown";
         }
 
 
-        // preview
-        await sock.sendMessage(chatId,{
-            image:{
-                url:thumbnail
-            },
-            caption:
-`🎵 *${title}*
+        // =========================
+        // PREVIEW
+        // =========================
 
-📥 Downloading...`
-        },{
-            quoted:message
-        });
+        if (thumbnail) {
+
+            await sock.sendMessage(
+                chatId,
+                {
+                    image: {
+                        url: thumbnail
+                    },
+                    caption:
+                        `🎵 *${title}*\n` +
+                        `⏱️ *${duration}*\n\n` +
+                        `📥 Downloading...`
+                },
+                {
+                    quoted: message
+                }
+            );
+
+        } else {
+
+            await sock.sendMessage(
+                chatId,
+                {
+                    text:
+                        `🎵 *${title}*\n` +
+                        `⏱️ *${duration}*\n\n` +
+                        `📥 Downloading...`
+                },
+                {
+                    quoted: message
+                }
+            );
+        }
 
 
+        // =========================
+        // TEMP FILE
+        // =========================
 
-        filePath=path.join(
+        filePath = path.join(
             os.tmpdir(),
             `song_${Date.now()}.mp3`
         );
 
 
-        await ytdlp(url,{
+        console.log("[SONG] Downloading:", url);
 
-            extractAudio:true,
-            audioFormat:"mp3",
-            audioQuality:"128K",
 
-            output:filePath,
+        // =========================
+        // DOWNLOAD MP3
+        // =========================
 
-            noPlaylist:true,
+        await ytdlp(url, {
+
+            ...YTDLP_COMMON,
+
+            extractAudio: true,
+
+            audioFormat: "mp3",
+
+            audioQuality: "128K",
+
+            output: filePath,
+
+            ffmpegLocation: ffmpeg,
 
             extractorArgs:
-            "youtube:player_client=android"
+                "youtube:player_client=web_safari"
 
         });
 
 
+        // =========================
+        // CHECK FILE
+        // =========================
 
-        if(!fs.existsSync(filePath))
-            throw new Error("Audio file not created");
+        if (!fs.existsSync(filePath)) {
 
-
-        const audio=fs.readFileSync(filePath);
-
-
-
-        await sock.sendMessage(chatId,{
-            audio:audio,
-            mimetype:"audio/mpeg",
-            fileName:`${title}.mp3`,
-            ptt:false,
-
-            contextInfo:{
-                externalAdReply:{
-                    title:title,
-                    body:"🎵 Song Downloader",
-                    thumbnailUrl:thumbnail,
-                    mediaType:2,
-                    renderLargerThumbnail:true,
-                    sourceUrl:url
-                }
-            }
-
-        },{
-            quoted:message
-        });
-
-
-
-        await sock.sendMessage(chatId,{
-            react:{
-                text:"✅",
-                key:message.key
-            }
-        });
-
-
-    }catch(err){
-
-        console.log("SONG ERROR:",err);
-
-        await sock.sendMessage(chatId,{
-            text:
-`❌ Song Download Failed
-
-${err.message}`
-        },{
-            quoted:message
-        });
-
-
-    }finally{
-
-        if(filePath && fs.existsSync(filePath)){
-            fs.unlinkSync(filePath);
+            throw new Error(
+                "MP3 file was not created."
+            );
         }
 
+
+        const stats = fs.statSync(filePath);
+
+        if (stats.size < 10000) {
+
+            throw new Error(
+                "Downloaded audio file is too small."
+            );
+        }
+
+
+        const audio =
+            fs.readFileSync(filePath);
+
+
+        // =========================
+        // SAFE FILE NAME
+        // =========================
+
+        const safeTitle =
+            title
+                .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
+                .replace(/\s+/g, " ")
+                .trim()
+                .substring(0, 80) ||
+            "song";
+
+
+        // =========================
+        // SEND AUDIO
+        // =========================
+
+        await sock.sendMessage(
+            chatId,
+            {
+                audio: audio,
+
+                mimetype:
+                    "audio/mpeg",
+
+                fileName:
+                    `${safeTitle}.mp3`,
+
+                ptt: false,
+
+                contextInfo: {
+
+                    externalAdReply: {
+
+                        title: title,
+
+                        body:
+                            "🎵 Song Downloader",
+
+                        thumbnailUrl:
+                            thumbnail || undefined,
+
+                        mediaType: 2,
+
+                        renderLargerThumbnail:
+                            true,
+
+                        sourceUrl: url
+                    }
+                }
+            },
+            {
+                quoted: message
+            }
+        );
+
+
+        // =========================
+        // SUCCESS
+        // =========================
+
+        await sock.sendMessage(chatId, {
+            react: {
+                text: "✅",
+                key: message.key
+            }
+        });
+
+
+        console.log(
+            "[SONG] Successfully sent"
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "[SONG ERROR]",
+            error
+        );
+
+
+        await sock.sendMessage(
+            chatId,
+            {
+                text:
+                    `❌ *Song Download Failed*\n\n` +
+                    `${error.message}`
+            },
+            {
+                quoted: message
+            }
+        );
+
+
+    } finally {
+
+        if (
+            filePath &&
+            fs.existsSync(filePath)
+        ) {
+
+            try {
+                fs.unlinkSync(filePath);
+            } catch {}
+        }
     }
 }
 
 
-module.exports= songCommand;
+module.exports = songCommand;
