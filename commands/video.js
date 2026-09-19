@@ -2,10 +2,6 @@ const ytdl = require("@pontalabs/ytdl");
 const yts = require("yt-search");
 const axios = require("axios");
 
-
-// ===============================
-// GET MESSAGE TEXT
-// ===============================
 function getText(message) {
 
     let msg = message?.message || message;
@@ -27,268 +23,236 @@ function getText(message) {
         msg.extendedTextMessage?.text ||
         msg.imageMessage?.caption ||
         msg.videoMessage?.caption ||
-        msg.documentMessage?.caption ||
         ""
     ).trim();
 }
 
 
 
-// ===============================
-// VIDEO COMMAND
-// ===============================
 async function videoCommand(sock, chatId, message) {
 
-    try {
+try {
 
 
-        const text = getText(message);
+const text = getText(message);
 
 
-        console.log(
-            "VIDEO COMMAND:",
-            text
-        );
-
-
-        const query = text
-            .replace(/^\.video\s*/i, "")
-            .trim();
+const query = text
+.replace(/^\.video\s*/i,"")
+.trim();
 
 
 
-        if (!query) {
+if(!query){
 
-            return sock.sendMessage(
-                chatId,
-                {
-                    text:
+return sock.sendMessage(
+chatId,
+{
+text:
 `🎥 *Video Downloader*
 
-Usage:
-.video video name
+Use:
+.video video name`
+},
+{
+quoted:message
+}
+);
 
-Example:
-.video Tum Hi Ho`
-                },
-                {
-                    quoted: message
-                }
-            );
-
-        }
+}
 
 
 
-
-        await sock.sendMessage(chatId,{
-            react:{
-                text:"🔎",
-                key:message.key
-            }
-        });
-
-
-
-        // SEARCH
-
-        const search =
-            await yts(query);
+await sock.sendMessage(chatId,{
+react:{
+text:"🔎",
+key:message.key
+}
+});
 
 
 
-        if(!search.videos.length){
-
-            throw new Error(
-                "Video not found"
-            );
-
-        }
+const search = await yts(query);
 
 
 
-        const video =
-            search.videos[0];
+if(!search.videos.length){
+
+throw new Error(
+"No video found"
+);
+
+}
 
 
 
-        // PREVIEW
+const video = search.videos[0];
 
-        await sock.sendMessage(
-            chatId,
-            {
-                image:{
-                    url:video.thumbnail
-                },
 
-                caption:
+
+await sock.sendMessage(
+chatId,
+{
+image:{
+url:video.thumbnail
+},
+
+caption:
 `🎥 *${video.title}*
 
-⏱️ ${video.timestamp}
-
-📥 Downloading HD...`
-            },
-            {
-                quoted:message
-            }
-        );
-
-
-
-
-        await sock.sendMessage(chatId,{
-            react:{
-                text:"⏳",
-                key:message.key
-            }
-        });
-
-
-
-
-        // ===============================
-        // PONTALABS DOWNLOAD
-        // ===============================
-
-
-        const result =
-            await ytdl.downloadVideo(
-                video.url,
-                720
-            );
-
-
-        console.log(
-            "PONTALABS RESULT:",
-            result
-        );
-
-
-
-        const downloadUrl =
-            result?.download?.downloadUrl;
-
-
-
-        if(!downloadUrl){
-
-            throw new Error(
-                "No video download URL"
-            );
-
-        }
+⏳ Downloading HD...`
+},
+{
+quoted:message
+}
+);
 
 
 
 
 
-        // ===============================
-        // DOWNLOAD BUFFER
-        // ===============================
+// PONTALABS MP4 TRY
 
 
-        const file =
-            await axios.get(
-                downloadUrl,
-                {
-                    responseType:
-                    "arraybuffer",
-
-                    timeout:300000
-                }
-            );
+let result;
 
 
+try {
 
-        const buffer =
-            Buffer.from(file.data);
+result = await ytdl.downloadVideo(
+    video.url,
+    "720p"
+);
 
 
+} catch(e){
 
-        if(buffer.length < 10000){
 
-            throw new Error(
-                "Video file invalid"
-            );
+result = await ytdl.downloadVideo(
+    video.url,
+    720
+);
 
-        }
+
+}
 
 
 
-
-        // ===============================
-        // SEND VIDEO
-        // ===============================
-
-
-        await sock.sendMessage(
-            chatId,
-            {
-
-                video:
-                buffer,
+console.log(
+"PONTALABS:",
+result
+);
 
 
-                mimetype:
-                "video/mp4",
+
+const url =
+result?.download?.downloadUrl;
 
 
-                fileName:
-                `${video.title}.mp4`,
+
+if(!url){
+
+throw new Error(
+"No MP4 URL received"
+);
+
+}
 
 
-                caption:
+
+
+
+const response =
+await axios.get(
+url,
+{
+responseType:"arraybuffer",
+timeout:300000
+}
+);
+
+
+
+const buffer =
+Buffer.from(response.data);
+
+
+
+if(buffer.length < 10000){
+
+throw new Error(
+"Invalid video file"
+);
+
+}
+
+
+
+
+
+await sock.sendMessage(
+chatId,
+{
+
+video:buffer,
+
+mimetype:
+"video/mp4",
+
+fileName:
+`${video.title}.mp4`,
+
+caption:
 `🎥 *${video.title}*
 
 ✨ *Downloaded by SALMAN KHAN*`
 
-            },
-            {
-                quoted:message
-            }
-        );
+},
+{
+quoted:message
+}
+);
 
 
 
-
-
-        await sock.sendMessage(chatId,{
-            react:{
-                text:"✅",
-                key:message.key
-            }
-        });
-
-
-
-    }
-    catch(error){
-
-
-        console.log(
-            "VIDEO ERROR:",
-            error
-        );
+await sock.sendMessage(chatId,{
+react:{
+text:"✅",
+key:message.key
+}
+});
 
 
 
-        await sock.sendMessage(
-            chatId,
-            {
-                text:
+}
+catch(error){
+
+
+console.log(
+"VIDEO ERROR:",
+error
+);
+
+
+
+await sock.sendMessage(
+chatId,
+{
+text:
 `❌ *Video Download Failed*
 
 ${error.message}`
-            },
-            {
-                quoted:message
-            }
-        );
+},
+{
+quoted:message
+}
+);
 
-    }
 
 }
 
+
+}
 
 
 module.exports = videoCommand;
