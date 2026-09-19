@@ -23,7 +23,12 @@ function getText(message){
 
 
 
-async function downloadWithApify(youtubeUrl){
+async function downloadWithApify(
+    youtubeUrl,
+    sock,
+    chatId,
+    message
+){
 
     try{
 
@@ -37,7 +42,6 @@ async function downloadWithApify(youtubeUrl){
                 videoUrls:[
                     youtubeUrl
                 ],
-
 
                 proxyConfiguration:{
 
@@ -59,9 +63,20 @@ async function downloadWithApify(youtubeUrl){
 
 
 
-        console.log(
-            "APIFY RESPONSE:",
-            response.data
+        await sock.sendMessage(
+            chatId,
+            {
+                text:
+                "📦 *APIFY RESPONSE*\n\n" +
+                JSON.stringify(
+                    response.data,
+                    null,
+                    2
+                ).slice(0,3500)
+            },
+            {
+                quoted:message
+            }
         );
 
 
@@ -71,25 +86,75 @@ async function downloadWithApify(youtubeUrl){
 
 
 
-        if(data?.downloadUrl){
+        if(!data){
 
-            return data.downloadUrl;
+            throw new Error(
+                "Apify returned empty data"
+            );
 
         }
 
 
 
-        return null;
+
+        const downloadUrl =
+
+        data.downloadUrl ||
+
+        data.download_url ||
+
+        data.videoUrl ||
+
+        data.video_url ||
+
+        data.url ||
+
+        data.fileUrl ||
+
+        data.file_url;
+
+
+
+        if(!downloadUrl){
+
+            throw new Error(
+                "No download URL found in Apify response"
+            );
+
+        }
+
+
+
+        return downloadUrl;
 
 
 
     }
     catch(error){
 
-        console.log(
-            "APIFY ERROR:",
-            error.response?.data || error.message
+
+        await sock.sendMessage(
+            chatId,
+            {
+                text:
+                "❌ *APIFY ERROR*\n\n" +
+                (
+                error.response?.data
+                ?
+                JSON.stringify(
+                    error.response.data,
+                    null,
+                    2
+                )
+                :
+                error.message
+                )
+            },
+            {
+                quoted:message
+            }
         );
+
 
         return null;
 
@@ -102,18 +167,23 @@ async function downloadWithApify(youtubeUrl){
 
 
 
-async function videoCommand(sock, chatId, message){
+async function videoCommand(
+    sock,
+    chatId,
+    message
+){
 
 
 try{
 
 
-const text = getText(message);
+const text =
+getText(message);
 
 
 
-const query = text
-.replace(/^\.video\s*/i,"")
+const query =
+text.replace(/^\.video\s*/i,"")
 .trim();
 
 
@@ -124,7 +194,7 @@ return sock.sendMessage(
 chatId,
 {
 text:
-"🎥 Usage:\n.video video name"
+"🎥 Use:\n.video video name"
 },
 {
 quoted:message
@@ -154,7 +224,6 @@ key:message.key
 
 const search =
 await yts(query);
-
 
 
 
@@ -188,7 +257,7 @@ caption:
 
 `🎥 *${video.title}*
 
-📥 Downloading...`
+📥 Apify downloading...`
 
 },
 {
@@ -201,9 +270,13 @@ quoted:message
 
 
 
+
 const downloadUrl =
 await downloadWithApify(
-video.url
+    video.url,
+    sock,
+    chatId,
+    message
 );
 
 
@@ -213,7 +286,7 @@ video.url
 if(!downloadUrl){
 
 throw new Error(
-"Apify se download URL nahi mili"
+"Download URL missing"
 );
 
 }
@@ -241,6 +314,7 @@ timeout:120000
 
 const buffer =
 Buffer.from(file.data);
+
 
 
 
@@ -277,6 +351,7 @@ quoted:message
 
 
 
+
 await sock.sendMessage(
 chatId,
 {
@@ -301,12 +376,14 @@ error
 
 
 await sock.sendMessage(
+
 chatId,
+
 {
 
 text:
 
-`❌ *Video Download Failed*
+`❌ *VIDEO FAILED*
 
 ${error.message}`
 
@@ -315,13 +392,16 @@ ${error.message}`
 {
 quoted:message
 }
+
 );
 
 
 }
 
 
+
 }
+
 
 
 
