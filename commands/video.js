@@ -5,6 +5,12 @@ const yts = require("yt-search");
 const APIFY_TOKEN = process.env.APIFY_TOKEN;
 
 
+console.log(
+    "APIFY TOKEN:",
+    APIFY_TOKEN ? APIFY_TOKEN.slice(0,10) : "MISSING"
+);
+
+
 
 function getText(message){
 
@@ -23,6 +29,7 @@ function getText(message){
 
 
 
+
 async function downloadWithApify(
     youtubeUrl,
     sock,
@@ -31,6 +38,16 @@ async function downloadWithApify(
 ){
 
     try{
+
+
+        if(!APIFY_TOKEN){
+
+            throw new Error(
+                "APIFY_TOKEN missing in Railway variables"
+            );
+
+        }
+
 
 
         const response = await axios.post(
@@ -67,12 +84,12 @@ async function downloadWithApify(
             chatId,
             {
                 text:
-                "📦 *APIFY RESPONSE*\n\n" +
+                "📦 APIFY RESPONSE:\n\n" +
                 JSON.stringify(
                     response.data,
                     null,
                     2
-                ).slice(0,3500)
+                ).slice(0,3000)
             },
             {
                 quoted:message
@@ -81,15 +98,16 @@ async function downloadWithApify(
 
 
 
+
         const data =
-        response.data[0];
+        response.data?.[0];
 
 
 
         if(!data){
 
             throw new Error(
-                "Apify returned empty data"
+                "Apify returned empty response"
             );
 
         }
@@ -99,26 +117,20 @@ async function downloadWithApify(
 
         const downloadUrl =
 
-        data.downloadUrl ||
-
-        data.download_url ||
-
-        data.videoUrl ||
-
-        data.video_url ||
-
-        data.url ||
-
-        data.fileUrl ||
-
-        data.file_url;
+            data.downloadUrl ||
+            data.download_url ||
+            data.videoUrl ||
+            data.video_url ||
+            data.url ||
+            data.fileUrl ||
+            data.file_url;
 
 
 
         if(!downloadUrl){
 
             throw new Error(
-                "No download URL found in Apify response"
+                "Download URL not found"
             );
 
         }
@@ -137,17 +149,17 @@ async function downloadWithApify(
             chatId,
             {
                 text:
-                "❌ *APIFY ERROR*\n\n" +
+                "❌ APIFY ERROR:\n\n" +
                 (
-                error.response?.data
-                ?
-                JSON.stringify(
-                    error.response.data,
-                    null,
-                    2
-                )
-                :
-                error.message
+                    error.response?.data
+                    ?
+                    JSON.stringify(
+                        error.response.data,
+                        null,
+                        2
+                    )
+                    :
+                    error.message
                 )
             },
             {
@@ -160,8 +172,9 @@ async function downloadWithApify(
 
     }
 
-
 }
+
+
 
 
 
@@ -194,7 +207,7 @@ return sock.sendMessage(
 chatId,
 {
 text:
-"🎥 Use:\n.video video name"
+"🎥 Usage:\n.video video name"
 },
 {
 quoted:message
@@ -202,7 +215,6 @@ quoted:message
 );
 
 }
-
 
 
 
@@ -216,7 +228,6 @@ key:message.key
 }
 }
 );
-
 
 
 
@@ -257,7 +268,7 @@ caption:
 
 `🎥 *${video.title}*
 
-📥 Apify downloading...`
+📥 Downloading from Apify...`
 
 },
 {
@@ -270,8 +281,7 @@ quoted:message
 
 
 
-
-const downloadUrl =
+const url =
 await downloadWithApify(
     video.url,
     sock,
@@ -283,13 +293,28 @@ await downloadWithApify(
 
 
 
-if(!downloadUrl){
+if(!url){
 
 throw new Error(
-"Download URL missing"
+"Apify URL missing"
 );
 
 }
+
+
+
+
+
+await sock.sendMessage(
+chatId,
+{
+text:
+"⬇️ Download URL received"
+},
+{
+quoted:message
+}
+);
 
 
 
@@ -298,23 +323,18 @@ throw new Error(
 
 const file =
 await axios.get(
-
-downloadUrl,
-
-{
-responseType:"arraybuffer",
-timeout:120000
-}
-
+    url,
+    {
+        responseType:"arraybuffer",
+        timeout:120000
+    }
 );
-
 
 
 
 
 const buffer =
 Buffer.from(file.data);
-
 
 
 
@@ -335,9 +355,9 @@ fileName:
 
 caption:
 
-`🎥 *${video.title}*
+`🎥 ${video.title}
 
-✅ Downloaded`
+✅ Done`
 
 },
 
@@ -348,19 +368,6 @@ quoted:message
 );
 
 
-
-
-
-
-await sock.sendMessage(
-chatId,
-{
-react:{
-text:"✅",
-key:message.key
-}
-}
-);
 
 
 
@@ -376,32 +383,23 @@ error
 
 
 await sock.sendMessage(
-
 chatId,
-
 {
-
 text:
-
-`❌ *VIDEO FAILED*
+`❌ VIDEO FAILED
 
 ${error.message}`
-
 },
-
 {
 quoted:message
 }
-
 );
 
 
 }
 
 
-
 }
-
 
 
 
