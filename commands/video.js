@@ -3,7 +3,6 @@ const yts = require("yt-search");
 const axios = require("axios");
 
 
-
 function getText(message) {
 
     let msg = message?.message || message;
@@ -16,9 +15,6 @@ function getText(message) {
     if (msg.viewOnceMessage?.message)
         msg = msg.viewOnceMessage.message;
 
-    if (msg.viewOnceMessageV2?.message)
-        msg = msg.viewOnceMessageV2.message;
-
 
     return (
         msg.conversation ||
@@ -28,8 +24,6 @@ function getText(message) {
         ""
     ).trim();
 }
-
-
 
 
 
@@ -53,10 +47,7 @@ return sock.sendMessage(
 chatId,
 {
 text:
-`🎥 *Video Downloader*
-
-Usage:
-.video video name`
+"🎥 Usage:\n.video video name"
 },
 {
 quoted:message
@@ -64,7 +55,6 @@ quoted:message
 );
 
 }
-
 
 
 
@@ -77,31 +67,22 @@ key:message.key
 
 
 
-
-
-const search =
-await yts(query);
+const search = await yts(query);
 
 
 
 if(!search.videos.length){
 
-throw new Error(
-"No video found"
-);
+throw new Error("No video found");
 
 }
 
 
 
-const video =
-search.videos[0];
+const video = search.videos[0];
 
 
 
-
-
-// PREVIEW
 
 await sock.sendMessage(
 chatId,
@@ -109,13 +90,10 @@ chatId,
 image:{
 url:video.thumbnail
 },
-
 caption:
 `🎥 *${video.title}*
 
-⏱️ ${video.timestamp}
-
-📥 Downloading 1080p...`
+⏳ Downloading 1080p...`
 },
 {
 quoted:message
@@ -126,40 +104,32 @@ quoted:message
 
 
 
-// FORCE 1080P ONLY
-
-
-console.log(
-"Downloading 1080:",
-video.url
-);
-
-
+// FORCE 1080 ONLY
 
 const result =
 await ytdl.downloadVideo(
-    video.url,
-    1080
+video.url,
+1080
 );
 
 
 
 console.log(
-"SHADOWX RESULT:",
+"YTDL:",
 JSON.stringify(result,null,2)
 );
 
 
 
-const downloadUrl =
+const url =
 result?.download?.downloadUrl;
 
 
 
-if(!downloadUrl){
+if(!url){
 
 throw new Error(
-"1080p download URL not found"
+"1080 download URL missing"
 );
 
 }
@@ -167,16 +137,11 @@ throw new Error(
 
 
 
-
-// DOWNLOAD BUFFER
-
-
-const response =
+const res =
 await axios.get(
-downloadUrl,
+url,
 {
 responseType:"arraybuffer",
-
 timeout:300000
 }
 );
@@ -184,33 +149,28 @@ timeout:300000
 
 
 const buffer =
-Buffer.from(response.data);
+Buffer.from(res.data);
 
 
 
 console.log(
-"Video Size:",
+"SIZE:",
 (buffer.length/1024/1024).toFixed(2),
 "MB"
 );
 
 
 
-
-
-if(buffer.length < 10000){
+if(buffer.length < 500000){
 
 throw new Error(
-"Invalid video file"
+"Video file too small"
 );
 
 }
 
 
 
-
-
-// SEND VIDEO
 
 
 await sock.sendMessage(
@@ -219,12 +179,10 @@ chatId,
 
 video:buffer,
 
-mimetype:
-"video/mp4",
+mimetype:"video/mp4",
 
 fileName:
 `${video.title}.mp4`,
-
 
 caption:
 `🎥 *${video.title}*
@@ -236,8 +194,6 @@ caption:
 quoted:message
 }
 );
-
-
 
 
 
@@ -260,7 +216,6 @@ error
 );
 
 
-
 await sock.sendMessage(
 chatId,
 {
@@ -277,9 +232,7 @@ quoted:message
 
 }
 
-
 }
-
 
 
 module.exports = videoCommand;
