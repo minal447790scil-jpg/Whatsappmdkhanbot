@@ -1,5 +1,22 @@
 const yts = require("yt-search");
+const youtubedl = require("yt-dlp-exec");
 const fs = require("fs");
+
+
+/*
+ Create cookies file from Railway Variable
+*/
+
+if(process.env.COOKIES_TXT){
+
+    fs.writeFileSync(
+        "cookies.txt",
+        process.env.COOKIES_TXT
+    );
+
+}
+
+
 
 
 function getText(message){
@@ -19,24 +36,18 @@ function getText(message){
 
 
 
+
 async function videoCommand(sock, chatId, message){
 
 try{
 
 
-// KROSZTUBE IMPORT FIX
-const { download } = await import("krosztube");
-
-
-
 const text = getText(message);
-
 
 
 const query = text
 .replace(/^\.video\s*/i,"")
 .trim();
-
 
 
 
@@ -74,10 +85,8 @@ key:message.key
 
 
 
-
 const search =
 await yts(query);
-
 
 
 
@@ -91,11 +100,8 @@ throw new Error(
 
 
 
-
-
 const video =
 search.videos[0];
-
 
 
 
@@ -126,17 +132,19 @@ quoted:message
 
 
 
-// CREATE FOLDER
+if(!fs.existsSync("./videos")){
 
-const outputDir="./videos";
-
-
-if(!fs.existsSync(outputDir)){
-
-fs.mkdirSync(outputDir);
+fs.mkdirSync("./videos");
 
 }
 
+
+
+
+
+
+const output =
+`./videos/%(title)s.%(ext)s`;
 
 
 
@@ -153,20 +161,23 @@ video.url
 
 
 
-// DOWNLOAD USING KROSZTUBE
-
-const files =
-await download(
+await youtubedl(
 
 video.url,
 
 {
 
-quality:1080,
+output:output,
 
-container:"mp4",
+format:
+"best[ext=mp4]/best",
 
-outDir:outputDir
+cookies:
+"./cookies.txt",
+
+noCheckCertificates:true,
+
+retries:3
 
 }
 
@@ -176,48 +187,31 @@ outDir:outputDir
 
 
 
-console.log(
-"KROSZTUBE FILE:",
-files
-);
+
+const files =
+fs.readdirSync("./videos");
 
 
 
-
-
-if(!files || !files.length){
+if(!files.length){
 
 throw new Error(
-"Video file not generated"
+"Video file not found"
 );
 
 }
-
 
 
 
 
 const filePath =
-files[0];
+"./videos/" + files[files.length-1];
 
 
 
 
 
-
-if(!fs.existsSync(filePath)){
-
-throw new Error(
-"Downloaded file missing"
-);
-
-}
-
-
-
-
-
-const videoBuffer =
+const buffer =
 fs.readFileSync(filePath);
 
 
@@ -225,7 +219,7 @@ fs.readFileSync(filePath);
 
 
 
-if(videoBuffer.length < 10000){
+if(buffer.length < 10000){
 
 throw new Error(
 "Invalid video"
@@ -245,17 +239,13 @@ chatId,
 
 {
 
-video:videoBuffer,
-
+video:buffer,
 
 mimetype:
 "video/mp4",
 
-
 fileName:
 `${video.title}.mp4`,
-
-
 
 caption:
 
@@ -275,7 +265,6 @@ quoted:message
 
 
 
-
 await sock.sendMessage(
 chatId,
 {
@@ -290,7 +279,6 @@ key:message.key
 
 
 }
-
 catch(error){
 
 
@@ -301,19 +289,16 @@ error
 
 
 
-
 await sock.sendMessage(
 
 chatId,
 
 {
-
 text:
 
 `❌ *Video Download Failed*
 
 ${error.message}`
-
 },
 
 {
@@ -323,13 +308,11 @@ quoted:message
 );
 
 
-
 }
 
 
+
 }
-
-
 
 
 
