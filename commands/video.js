@@ -1,7 +1,5 @@
 const yts = require("yt-search");
-const { download } = require("krosztube");
 const fs = require("fs");
-const path = require("path");
 
 
 function getText(message){
@@ -20,17 +18,25 @@ function getText(message){
 
 
 
+
 async function videoCommand(sock, chatId, message){
 
 try{
 
 
+// KROSZTUBE IMPORT FIX
+const { download } = await import("krosztube");
+
+
+
 const text = getText(message);
+
 
 
 const query = text
 .replace(/^\.video\s*/i,"")
 .trim();
+
 
 
 
@@ -40,7 +46,9 @@ return sock.sendMessage(
 chatId,
 {
 text:
-"🎥 Usage:\n.video video name"
+`🎥 Usage:
+
+.video video name`
 },
 {
 quoted:message
@@ -49,43 +57,64 @@ quoted:message
 
 }
 
-
-
-await sock.sendMessage(chatId,{
-react:{
-text:"🔎",
-key:message.key
-}
-});
-
-
-
-const search = await yts(query);
-
-
-if(!search.videos.length){
-
-throw new Error("Video not found");
-
-}
-
-
-
-const video = search.videos[0];
 
 
 
 await sock.sendMessage(
 chatId,
 {
+react:{
+text:"🔎",
+key:message.key
+}
+}
+);
+
+
+
+
+
+
+const search =
+await yts(query);
+
+
+
+
+if(!search.videos.length){
+
+throw new Error(
+"Video not found"
+);
+
+}
+
+
+
+
+
+const video =
+search.videos[0];
+
+
+
+
+
+
+await sock.sendMessage(
+chatId,
+{
+
 image:{
 url:video.thumbnail
 },
 
 caption:
+
 `🎥 *${video.title}*
 
 📥 Downloading...`
+
 },
 {
 quoted:message
@@ -96,27 +125,74 @@ quoted:message
 
 
 
-const outputDir = "./videos";
+
+// CREATE FOLDER
+
+const outputDir="./videos";
+
 
 if(!fs.existsSync(outputDir)){
-    fs.mkdirSync(outputDir);
+
+fs.mkdirSync(outputDir);
+
 }
 
 
 
 
-const files = await download(
-    video.url,
-    {
-        quality:1080,
-        container:"mp4",
-        outDir:outputDir
-    }
+
+
+
+console.log(
+"Downloading:",
+video.url
 );
 
 
 
-console.log("KROSZTUBE:",files);
+
+
+
+// DOWNLOAD USING KROSZTUBE
+
+const files =
+await download(
+
+video.url,
+
+{
+
+quality:1080,
+
+container:"mp4",
+
+outDir:outputDir
+
+}
+
+);
+
+
+
+
+
+console.log(
+"KROSZTUBE FILE:",
+files
+);
+
+
+
+
+
+if(!files || !files.length){
+
+throw new Error(
+"Video file not generated"
+);
+
+}
+
 
 
 
@@ -126,10 +202,13 @@ files[0];
 
 
 
+
+
+
 if(!fs.existsSync(filePath)){
 
 throw new Error(
-"Video file not created"
+"Downloaded file missing"
 );
 
 }
@@ -137,72 +216,121 @@ throw new Error(
 
 
 
-const buffer =
+
+const videoBuffer =
 fs.readFileSync(filePath);
 
 
 
 
 
-await sock.sendMessage(
-chatId,
-{
-video:buffer,
 
-mimetype:"video/mp4",
+if(videoBuffer.length < 10000){
+
+throw new Error(
+"Invalid video"
+);
+
+}
+
+
+
+
+
+
+
+await sock.sendMessage(
+
+chatId,
+
+{
+
+video:videoBuffer,
+
+
+mimetype:
+"video/mp4",
+
 
 fileName:
 `${video.title}.mp4`,
 
+
+
 caption:
-`🎥 ${video.title}
+
+`🎥 *${video.title}*
 
 ✅ Downloaded`
+
 },
+
 {
 quoted:message
 }
+
 );
 
 
 
 
-await sock.sendMessage(chatId,{
-react:{
-text:"✅",
-key:message.key
-}
-});
-
-
-
-}
-catch(err){
-
-console.log(
-"KROSZTUBE ERROR:",
-err
-);
 
 
 await sock.sendMessage(
 chatId,
 {
-text:
-`❌ Video Download Failed
-
-${err.message}`
-},
-{
-quoted:message
+react:{
+text:"✅",
+key:message.key
+}
 }
 );
 
 
+
+
+}
+
+catch(error){
+
+
+console.log(
+"VIDEO ERROR:",
+error
+);
+
+
+
+
+await sock.sendMessage(
+
+chatId,
+
+{
+
+text:
+
+`❌ *Video Download Failed*
+
+${error.message}`
+
+},
+
+{
+quoted:message
+}
+
+);
+
+
+
 }
 
 
 }
+
+
+
 
 
 module.exports = videoCommand;
