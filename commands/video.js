@@ -1,41 +1,8 @@
+const axios = require("axios");
 const yts = require("yt-search");
-const youtubedl = require("yt-dlp-exec");
-const fs = require("fs");
-const path = require("path");
 
 
-// CREATE COOKIES FILE
-
-try {
-
-    if (process.env.COOKIES_TXT) {
-
-        fs.writeFileSync(
-            "./cookies.txt",
-            process.env.COOKIES_TXT
-        );
-
-        console.log(
-            "COOKIE CREATED:",
-            process.env.COOKIES_TXT.length
-        );
-
-    } else {
-
-        console.log("NO COOKIES VARIABLE");
-
-    }
-
-}
-catch(err){
-
-    console.log(
-        "COOKIE ERROR:",
-        err.message
-    );
-
-}
-
+const APIFY_TOKEN = process.env.APIFY_TOKEN;
 
 
 
@@ -56,13 +23,93 @@ function getText(message){
 
 
 
+async function downloadWithApify(youtubeUrl){
+
+    try{
+
+
+        const response = await axios.post(
+
+            `https://api.apify.com/v2/acts/convertfleetdotonline~video-downloader/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
+
+            {
+
+                videoUrls:[
+                    youtubeUrl
+                ],
+
+
+                proxyConfiguration:{
+
+                    useApifyProxy:true,
+
+                    apifyProxyGroups:[
+                        "RESIDENTIAL"
+                    ]
+
+                }
+
+            },
+
+            {
+                timeout:120000
+            }
+
+        );
+
+
+
+        console.log(
+            "APIFY RESPONSE:",
+            response.data
+        );
+
+
+
+        const data =
+        response.data[0];
+
+
+
+        if(data?.downloadUrl){
+
+            return data.downloadUrl;
+
+        }
+
+
+
+        return null;
+
+
+
+    }
+    catch(error){
+
+        console.log(
+            "APIFY ERROR:",
+            error.response?.data || error.message
+        );
+
+        return null;
+
+    }
+
+
+}
+
+
+
+
 
 async function videoCommand(sock, chatId, message){
+
 
 try{
 
 
 const text = getText(message);
+
 
 
 const query = text
@@ -89,6 +136,7 @@ quoted:message
 
 
 
+
 await sock.sendMessage(
 chatId,
 {
@@ -103,20 +151,26 @@ key:message.key
 
 
 
-const search = await yts(query);
+
+const search =
+await yts(query);
+
 
 
 
 if(!search.videos.length){
 
-throw new Error("Video not found");
+throw new Error(
+"No video found"
+);
 
 }
 
 
 
 
-const video = search.videos[0];
+const video =
+search.videos[0];
 
 
 
@@ -125,14 +179,17 @@ const video = search.videos[0];
 await sock.sendMessage(
 chatId,
 {
+
 image:{
 url:video.thumbnail
 },
 
 caption:
+
 `🎥 *${video.title}*
 
 📥 Downloading...`
+
 },
 {
 quoted:message
@@ -143,18 +200,9 @@ quoted:message
 
 
 
-if(!fs.existsSync("./videos")){
 
-fs.mkdirSync("./videos");
-
-}
-
-
-
-
-
-console.log(
-"START DOWNLOAD:",
+const downloadUrl =
+await downloadWithApify(
 video.url
 );
 
@@ -162,54 +210,10 @@ video.url
 
 
 
-await youtubedl(
-video.url,
-{
-
-output:
-"./videos/%(title)s.%(ext)s",
-
-
-format:
-"best[ext=mp4]/best",
-
-
-cookies:
-"./cookies.txt",
-
-
-no_check_certificates:
-true,
-
-
-retries:
-5,
-
-
-socket_timeout:
-60
-
-}
-);
-
-
-
-
-
-const files =
-fs.readdirSync("./videos")
-.filter(
-f =>
-f.endsWith(".mp4") ||
-f.endsWith(".webm")
-);
-
-
-
-if(!files.length){
+if(!downloadUrl){
 
 throw new Error(
-"Downloaded file not found"
+"Apify se download URL nahi mili"
 );
 
 }
@@ -217,19 +221,18 @@ throw new Error(
 
 
 
-const filePath =
-path.join(
-"./videos",
-files[files.length-1]
-);
 
 
+const file =
+await axios.get(
 
+downloadUrl,
 
+{
+responseType:"arraybuffer",
+timeout:120000
+}
 
-console.log(
-"SENDING:",
-filePath
 );
 
 
@@ -237,49 +240,40 @@ filePath
 
 
 const buffer =
-fs.readFileSync(filePath);
-
-
-
-
-
-console.log(
-"SIZE:",
-buffer.length
-);
-
+Buffer.from(file.data);
 
 
 
 
 
 await sock.sendMessage(
+
 chatId,
+
 {
 
 video:buffer,
 
-mimetype:
-"video/mp4",
+mimetype:"video/mp4",
 
 fileName:
 `${video.title}.mp4`,
 
 caption:
-`🎥 ${video.title}\n\n✅ Downloaded`
+
+`🎥 *${video.title}*
+
+✅ Downloaded`
 
 },
+
 {
 quoted:message
 }
+
 );
 
 
-
-
-
-
-fs.unlinkSync(filePath);
 
 
 
@@ -309,11 +303,15 @@ error
 await sock.sendMessage(
 chatId,
 {
+
 text:
+
 `❌ *Video Download Failed*
 
 ${error.message}`
+
 },
+
 {
 quoted:message
 }
