@@ -5,22 +5,11 @@ const ffmpeg = require("fluent-ffmpeg");
 const fs = require("fs");
 
 
-
 function getText(message){
 
     let msg = message?.message || message;
 
     if(!msg) return "";
-
-    if(msg.ephemeralMessage?.message)
-        msg = msg.ephemeralMessage.message;
-
-    if(msg.viewOnceMessage?.message)
-        msg = msg.viewOnceMessage.message;
-
-    if(msg.viewOnceMessageV2?.message)
-        msg = msg.viewOnceMessageV2.message;
-
 
     return (
         msg.conversation ||
@@ -34,26 +23,20 @@ function getText(message){
 
 
 
-
-
-function convertFast(input){
+function convertWhatsApp(input){
 
     return new Promise((resolve,reject)=>{
 
-        const output = "./wa_ready.mp4";
-
+        const output="./wa_video.mp4";
 
         ffmpeg(input)
 
-        .size("?x720")
-
         .videoCodec("libx264")
-
         .audioCodec("aac")
 
         .outputOptions([
             "-preset ultrafast",
-            "-crf 30",
+            "-crf 28",
             "-movflags +faststart",
             "-pix_fmt yuv420p"
         ])
@@ -80,16 +63,14 @@ function convertFast(input){
 
 
 
-
 async function videoCommand(sock,chatId,message){
 
 try{
 
 
-const text = getText(message);
+const text=getText(message);
 
-
-const query = text
+const query=text
 .replace(/^\.video\s*/i,"")
 .trim();
 
@@ -100,7 +81,7 @@ if(!query){
 return sock.sendMessage(
 chatId,
 {
-text:"🎥 Usage:\n.video video name"
+text:"🎥 Use:\n.video video name"
 },
 {
 quoted:message
@@ -112,22 +93,7 @@ quoted:message
 
 
 
-await sock.sendMessage(
-chatId,
-{
-react:{
-text:"🔎",
-key:message.key
-}
-}
-);
-
-
-
-
-
-const search = await yts(query);
-
+const search=await yts(query);
 
 
 if(!search.videos.length){
@@ -138,8 +104,7 @@ throw new Error("Video not found");
 
 
 
-const video = search.videos[0];
-
+const video=search.videos[0];
 
 
 
@@ -150,9 +115,8 @@ chatId,
 image:{
 url:video.thumbnail
 },
-
 caption:
-`🎥 *${video.title}*\n\n⏳ Downloading...`
+`🎥 ${video.title}\n\n⏳ Downloading...`
 },
 {
 quoted:message
@@ -163,9 +127,7 @@ quoted:message
 
 
 
-
-
-// DOWNLOAD FROM YTDL
+// SAME WORKING METHOD
 
 const result =
 await ytdl.downloadVideo(
@@ -177,18 +139,17 @@ await ytdl.downloadVideo(
 
 
 
-const videoUrl =
-
+const url =
 result?.download?.downloadUrl ||
 result?.downloadUrl ||
 result?.url;
 
 
 
-if(!videoUrl){
+if(!url){
 
 throw new Error(
-"No video URL found"
+"Video URL not found"
 );
 
 }
@@ -197,16 +158,13 @@ throw new Error(
 
 
 
-const rawFile =
-"./raw_video.mp4";
-
-
+const raw="./raw.mp4";
 
 
 
 const file =
 await axios.get(
-videoUrl,
+url,
 {
 responseType:"arraybuffer",
 timeout:180000
@@ -216,26 +174,39 @@ timeout:180000
 
 
 fs.writeFileSync(
-rawFile,
+raw,
 Buffer.from(file.data)
 );
 
 
 
+let finalFile=raw;
 
 
 
-// FAST WHATSAPP CONVERSION
+try{
 
-const readyFile =
-await convertFast(rawFile);
+
+finalFile =
+await convertWhatsApp(raw);
+
+
+}
+catch(e){
+
+console.log(
+"Conversion failed:",
+e.message
+);
+
+}
 
 
 
 
 
 const buffer =
-fs.readFileSync(readyFile);
+fs.readFileSync(finalFile);
 
 
 
@@ -245,14 +216,10 @@ await sock.sendMessage(
 chatId,
 {
 video:buffer,
-
 mimetype:"video/mp4",
-
-fileName:
-`${video.title}.mp4`,
-
+fileName:"video.mp4",
 caption:
-`🎥 *${video.title}*\n\n✅ Downloaded`
+`🎥 ${video.title}\n\n✅ Done`
 },
 {
 quoted:message
@@ -263,30 +230,12 @@ quoted:message
 
 
 
-
-// CLEAN FILES
-
-if(fs.existsSync(rawFile))
-fs.unlinkSync(rawFile);
+if(fs.existsSync(raw))
+fs.unlinkSync(raw);
 
 
-if(fs.existsSync(readyFile))
-fs.unlinkSync(readyFile);
-
-
-
-
-
-
-await sock.sendMessage(
-chatId,
-{
-react:{
-text:"✅",
-key:message.key
-}
-}
-);
+if(finalFile !== raw && fs.existsSync(finalFile))
+fs.unlinkSync(finalFile);
 
 
 
@@ -316,9 +265,8 @@ quoted:message
 }
 
 
-
 }
 
 
 
-module.exports = videoCommand;
+module.exports=videoCommand;
