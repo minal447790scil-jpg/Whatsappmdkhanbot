@@ -1,18 +1,23 @@
 const yts = require("yt-search");
 const youtubedl = require("yt-dlp-exec");
 const fs = require("fs");
+const path = require("path");
 
 
-/*
- Create cookies file from Railway Variable
-*/
+// Create cookies file from Railway variable
 
-if(process.env.COOKIES_TXT){
+if (process.env.COOKIES_TXT) {
 
     fs.writeFileSync(
-        "cookies.txt",
+        "./cookies.txt",
         process.env.COOKIES_TXT
     );
+
+    console.log("✅ Cookies file created");
+
+} else {
+
+    console.log("❌ COOKIES_TXT missing");
 
 }
 
@@ -38,6 +43,7 @@ function getText(message){
 
 
 async function videoCommand(sock, chatId, message){
+
 
 try{
 
@@ -85,6 +91,7 @@ key:message.key
 
 
 
+
 const search =
 await yts(query);
 
@@ -93,10 +100,11 @@ await yts(query);
 if(!search.videos.length){
 
 throw new Error(
-"Video not found"
+"No video found"
 );
 
 }
+
 
 
 
@@ -131,21 +139,11 @@ quoted:message
 
 
 
-
 if(!fs.existsSync("./videos")){
 
 fs.mkdirSync("./videos");
 
 }
-
-
-
-
-
-
-const output =
-`./videos/%(title)s.%(ext)s`;
-
 
 
 
@@ -160,36 +158,56 @@ video.url
 
 
 
-
 await youtubedl(
-
 video.url,
-
 {
 
-output:output,
+output:
+"./videos/%(title)s.%(ext)s",
+
 
 format:
 "best[ext=mp4]/best",
 
+
+
 cookies:
 "./cookies.txt",
 
-noCheckCertificates:true,
 
-retries:3
+
+js_runtimes:
+"deno",
+
+
+
+no_check_certificates:
+true,
+
+
+
+retries:
+5,
+
+
+socket_timeout:
+60
 
 }
-
 );
 
 
 
 
 
-
 const files =
-fs.readdirSync("./videos");
+fs.readdirSync("./videos")
+.filter(
+file =>
+file.endsWith(".mp4") ||
+file.endsWith(".mkv") ||
+file.endsWith(".webm")
+);
 
 
 
@@ -204,8 +222,21 @@ throw new Error(
 
 
 
+
 const filePath =
-"./videos/" + files[files.length-1];
+path.join(
+"./videos",
+files[files.length-1]
+);
+
+
+
+
+
+console.log(
+"Sending file:",
+filePath
+);
 
 
 
@@ -218,16 +249,10 @@ fs.readFileSync(filePath);
 
 
 
-
-if(buffer.length < 10000){
-
-throw new Error(
-"Invalid video"
+console.log(
+"Video size:",
+buffer.length
 );
-
-}
-
-
 
 
 
@@ -239,13 +264,17 @@ chatId,
 
 {
 
-video:buffer,
+video:
+buffer,
+
 
 mimetype:
 "video/mp4",
 
+
 fileName:
 `${video.title}.mp4`,
+
 
 caption:
 
@@ -278,6 +307,13 @@ key:message.key
 
 
 
+
+// delete file after sending
+
+fs.unlinkSync(filePath);
+
+
+
 }
 catch(error){
 
@@ -294,11 +330,13 @@ await sock.sendMessage(
 chatId,
 
 {
+
 text:
 
 `❌ *Video Download Failed*
 
 ${error.message}`
+
 },
 
 {
