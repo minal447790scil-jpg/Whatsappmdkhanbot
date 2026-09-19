@@ -32,16 +32,23 @@ async function downloadWithApify(youtubeUrl, sock, chatId, message) {
             throw new Error("APIFY_TOKEN missing");
         }
 
+        // 🔥 Use the YouTube-specific Actor with guaranteed downloadUrl
         const response = await axios.post(
-            `https://api.apify.com/v2/acts/convertfleetdotonline~video-downloader/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
+            `https://api.apify.com/v2/acts/memo23~youtube-video-downloader/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
             {
-                videoUrls: [youtubeUrl],
-                proxyConfiguration: {
-                    useApifyProxy: true,
-                    apifyProxyGroups: ["RESIDENTIAL"]
-                }
+                videoUrls: [youtubeUrl]
             },
             { timeout: 180000 }
+        );
+
+        // 🔥 Debug: Send full response to WhatsApp
+        await sock.sendMessage(
+            chatId,
+            {
+                text: "📦 APIFY RESPONSE:\n\n" +
+                    JSON.stringify(response.data, null, 2).slice(0, 3000)
+            },
+            { quoted: message }
         );
 
         const data = response.data?.[0];
@@ -50,7 +57,12 @@ async function downloadWithApify(youtubeUrl, sock, chatId, message) {
             throw new Error("Apify returned empty response");
         }
 
-        // Sab possible fields dhoondo
+        // 🔥 Check for error in response
+        if (data.error || data.status === "FAILED") {
+            throw new Error(data.error || "Apify actor failed");
+        }
+
+        // 🔥 Try all possible fields for download URL
         const downloadUrl =
             data.downloadUrl ||
             data.download_url ||
@@ -59,9 +71,9 @@ async function downloadWithApify(youtubeUrl, sock, chatId, message) {
             data.url ||
             data.fileUrl ||
             data.file_url ||
-            data.keyValueStoreUrl ||
-            data.keyValueStoreUrl ||
-            (data.files && data.files[0]?.url) ||
+            data.selectedDownload?.publicUrl ||
+            data.selectedDownload?.downloadUrl ||
+            (data.formats && data.formats[0]?.downloadUrl) ||
             (data.links && data.links[0]?.url);
 
         if (!downloadUrl) {
@@ -71,7 +83,17 @@ async function downloadWithApify(youtubeUrl, sock, chatId, message) {
         return downloadUrl;
 
     } catch (error) {
-        console.log("APIFY ERROR:", error?.response?.data || error.message);
+        // 🔥 Send full error to WhatsApp
+        await sock.sendMessage(
+            chatId,
+            {
+                text: "❌ APIFY ERROR:\n\n" +
+                    (error.response?.data
+                        ? JSON.stringify(error.response.data, null, 2).slice(0, 3000)
+                        : error.message)
+            },
+            { quoted: message }
+        );
         return null;
     }
 }
@@ -133,6 +155,14 @@ async function videoCommand(sock, chatId, message) {
         if (!url) {
             throw new Error("Apify URL missing");
         }
+
+        await sock.sendMessage(
+            chatId,
+            {
+                text: "⬇️ Download URL received, downloading video..."
+            },
+            { quoted: message }
+        );
 
         const file = await axios.get(url, {
             responseType: "arraybuffer",
