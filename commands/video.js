@@ -30,9 +30,15 @@ function getText(message) {
 
 
 
-async function getVideoUrl(url) {
+async function getVideoDownload(url) {
 
-    const qualities = [1080, 720, 480];
+    const qualities = [
+        1080,
+        720,
+        480,
+        360
+    ];
+
 
     for (const quality of qualities) {
 
@@ -52,9 +58,8 @@ async function getVideoUrl(url) {
 
 
             console.log(
-                "RESULT QUALITY:",
-                quality,
-                result?.download?.downloadUrl
+                "YTDL RESULT:",
+                JSON.stringify(result, null, 2)
             );
 
 
@@ -62,17 +67,22 @@ async function getVideoUrl(url) {
                 result?.download?.downloadUrl;
 
 
-            if (downloadUrl) {
-                return downloadUrl;
+            if(downloadUrl){
+
+                return {
+                    url: downloadUrl,
+                    quality: quality
+                };
+
             }
 
 
-        } catch (e) {
+        } catch(err){
 
             console.log(
                 "Quality failed:",
                 quality,
-                e.message
+                err.message
             );
 
         }
@@ -122,12 +132,15 @@ quoted:message
 
 
 
+
 await sock.sendMessage(chatId,{
 react:{
 text:"🔎",
 key:message.key
 }
 });
+
+
 
 
 
@@ -152,6 +165,8 @@ search.videos[0];
 
 
 
+
+
 await sock.sendMessage(
 chatId,
 {
@@ -162,7 +177,9 @@ url:video.thumbnail
 caption:
 `🎥 *${video.title}*
 
-⏳ Downloading HD...`
+⏱️ ${video.timestamp}
+
+📥 Downloading HD...`
 },
 {
 quoted:message
@@ -173,31 +190,46 @@ quoted:message
 
 
 
-const videoUrl =
-await getVideoUrl(
+const download =
+await getVideoDownload(
 video.url
 );
 
 
 
-if(!videoUrl){
+if(!download){
 
 throw new Error(
-"No download URL found"
+"All qualities failed"
 );
 
 }
+
+
+
+console.log(
+"Selected:",
+download.quality
+);
+
 
 
 
 
 const response =
 await axios.get(
-videoUrl,
+download.url,
 {
 responseType:"arraybuffer",
 timeout:300000
 }
+);
+
+
+
+console.log(
+"VIDEO TYPE:",
+response.headers["content-type"]
 );
 
 
@@ -241,6 +273,7 @@ caption:
 quoted:message
 }
 );
+
 
 
 
