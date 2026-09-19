@@ -3,7 +3,6 @@ const yts = require("yt-search");
 const axios = require("axios");
 
 
-// GET MESSAGE TEXT
 function getText(message) {
 
     let msg = message?.message || message;
@@ -31,7 +30,65 @@ function getText(message) {
 
 
 
+async function getVideoUrl(url) {
+
+    const qualities = [1080, 720, 480];
+
+    for (const quality of qualities) {
+
+        try {
+
+            console.log(
+                "Trying quality:",
+                quality
+            );
+
+
+            const result =
+                await ytdl.downloadVideo(
+                    url,
+                    quality
+                );
+
+
+            console.log(
+                "RESULT QUALITY:",
+                quality,
+                result?.download?.downloadUrl
+            );
+
+
+            const downloadUrl =
+                result?.download?.downloadUrl;
+
+
+            if (downloadUrl) {
+                return downloadUrl;
+            }
+
+
+        } catch (e) {
+
+            console.log(
+                "Quality failed:",
+                quality,
+                e.message
+            );
+
+        }
+
+    }
+
+
+    return null;
+}
+
+
+
+
+
 async function videoCommand(sock, chatId, message) {
+
 
 try {
 
@@ -74,9 +131,9 @@ key:message.key
 
 
 
-// SEARCH
+const search =
+await yts(query);
 
-const search = await yts(query);
 
 
 if(!search.videos.length){
@@ -88,12 +145,12 @@ throw new Error(
 }
 
 
-const video = search.videos[0];
+
+const video =
+search.videos[0];
 
 
 
-
-// PREVIEW
 
 await sock.sendMessage(
 chatId,
@@ -114,50 +171,19 @@ quoted:message
 
 
 
-await sock.sendMessage(chatId,{
-react:{
-text:"⏳",
-key:message.key
-}
-});
-
-
-
-
-// SHADOWX YTDL
-
-console.log(
-"Downloading:",
-video.url
-);
-
-
-const result =
-await ytdl.downloadVideo(
-video.url,
-720
-);
-
-
-
-console.log(
-"SHADOWX RESULT:",
-result
-);
-
 
 
 const videoUrl =
-result?.download?.downloadUrl ||
-result?.url ||
-result?.downloadUrl;
+await getVideoUrl(
+video.url
+);
 
 
 
 if(!videoUrl){
 
 throw new Error(
-"No download URL received"
+"No download URL found"
 );
 
 }
@@ -165,9 +191,7 @@ throw new Error(
 
 
 
-// GET FILE
-
-const file =
+const response =
 await axios.get(
 videoUrl,
 {
@@ -179,7 +203,7 @@ timeout:300000
 
 
 const buffer =
-Buffer.from(file.data);
+Buffer.from(response.data);
 
 
 
@@ -194,8 +218,6 @@ throw new Error(
 
 
 
-
-// SEND VIDEO
 
 await sock.sendMessage(
 chatId,
@@ -261,7 +283,6 @@ quoted:message
 
 
 }
-
 
 
 module.exports = videoCommand;
