@@ -6,7 +6,7 @@ const os = require("os");
 const ffmpeg = require("ffmpeg-static");
 
 // ===============================
-// YT-DLP COMMON OPTIONS
+// YT-DLP OPTIONS
 // ===============================
 const YTDLP_COMMON = {
     jsRuntimes: "deno",
@@ -17,7 +17,48 @@ const YTDLP_COMMON = {
 };
 
 // ===============================
-// SAFE FILENAME
+// GET TEXT FROM BAILEYS MESSAGE
+// ===============================
+function getText(message) {
+    let msg = message?.message || message;
+
+    if (!msg) return "";
+
+    // Ephemeral
+    if (msg.ephemeralMessage?.message) {
+        msg = msg.ephemeralMessage.message;
+    }
+
+    // View once
+    if (msg.viewOnceMessage?.message) {
+        msg = msg.viewOnceMessage.message;
+    }
+
+    // View once v2
+    if (msg.viewOnceMessageV2?.message) {
+        msg = msg.viewOnceMessageV2.message;
+    }
+
+    // View once v2 extension
+    if (msg.viewOnceMessageV2Extension?.message) {
+        msg = msg.viewOnceMessageV2Extension.message;
+    }
+
+    return (
+        msg.conversation ||
+        msg.extendedTextMessage?.text ||
+        msg.imageMessage?.caption ||
+        msg.videoMessage?.caption ||
+        msg.documentMessage?.caption ||
+        msg.buttonsResponseMessage?.selectedButtonId ||
+        msg.listResponseMessage?.singleSelectReply?.selectedRowId ||
+        msg.templateButtonReplyMessage?.selectedId ||
+        ""
+    ).trim();
+}
+
+// ===============================
+// SAFE FILE NAME
 // ===============================
 function safeFileName(name) {
     return name
@@ -28,33 +69,31 @@ function safeFileName(name) {
 }
 
 // ===============================
-// GET MESSAGE TEXT
-// ===============================
-function getMessageText(message) {
-    return (
-        message?.conversation ||
-        message?.extendedTextMessage?.text ||
-        message?.imageMessage?.caption ||
-        message?.videoMessage?.caption ||
-        message?.documentMessage?.caption ||
-        message?.ephemeralMessage?.message?.conversation ||
-        message?.ephemeralMessage?.message?.extendedTextMessage?.text ||
-        message?.viewOnceMessage?.message?.conversation ||
-        message?.viewOnceMessage?.message?.extendedTextMessage?.text ||
-        ""
-    );
-}
-
-// ===============================
 // SONG COMMAND
 // ===============================
 async function songCommand(sock, chatId, message) {
-    try {
-        const text = getMessageText(message);
-        const args = text.trim().split(/\s+/).slice(1);
-        const query = args.join(" ").trim();
 
+    let filePath = null;
+
+    try {
+
+        // ===============================
+        // GET COMMAND TEXT
+        // ===============================
+        const text = getText(message);
+
+        console.log("SONG COMMAND TEXT:", text);
+
+        // Remove .song from beginning
+        const query = text
+            .replace(/^\.song\b/i, "")
+            .trim();
+
+        // ===============================
+        // NO QUERY
+        // ===============================
         if (!query) {
+
             return await sock.sendMessage(
                 chatId,
                 {
@@ -70,35 +109,36 @@ async function songCommand(sock, chatId, message) {
         }
 
         // ===============================
-        // SEARCH YOUTUBE
+        // SEARCH REACTION
         // ===============================
-        await sock.sendMessage(
-            chatId,
-            {
-                react: {
-                    text: "🔎",
-                    key: message.key
-                }
+        await sock.sendMessage(chatId, {
+            react: {
+                text: "🔎",
+                key: message.key
             }
-        );
+        });
 
-        const searchResult = await yts(query);
+        // ===============================
+        // YOUTUBE SEARCH
+        // ===============================
+        const result = await yts(query);
 
-        if (!searchResult || !searchResult.videos || !searchResult.videos.length) {
+        if (!result?.videos?.length) {
+
             return await sock.sendMessage(
                 chatId,
                 {
-                    text: "❌ *No song found.*\n\nTry another song name."
+                    text: `❌ No song found for:\n*${query}*`
                 },
                 { quoted: message }
             );
         }
 
-        const video = searchResult.videos[0];
+        const video = result.videos[0];
 
-        const title = video.title || "Unknown Song";
+        const title = video.title;
         const url = video.url;
-        const thumbnail = video.thumbnail || "";
+        const thumbnail = video.thumbnail;
         const duration = video.timestamp || "Unknown";
 
         const safeTitle = safeFileName(title);
@@ -117,86 +157,84 @@ async function songCommand(sock, chatId, message) {
                     `⏱️ *Duration:* ${duration}\n\n` +
                     `📥 *Downloading...*`
             },
-            { quoted: message }
+            {
+                quoted: message
+            }
         );
 
         // ===============================
-        // REACTION
+        // DOWNLOAD REACTION
         // ===============================
-        await sock.sendMessage(
-            chatId,
-            {
-                react: {
-                    text: "⏳",
-                    key: message.key
-                }
+        await sock.sendMessage(chatId, {
+            react: {
+                text: "⏳",
+                key: message.key
             }
-        );
+        });
 
         // ===============================
         // TEMP FILE
         // ===============================
-        const tempDir = os.tmpdir();
-
         const fileName =
-            `song_${Date.now()}_${Math.random()
-                .toString(36)
-                .substring(2, 8)}.mp3`;
+            `song_${Date.now()}.mp3`;
 
-        const filePath = path.join(tempDir, fileName);
+        filePath = path.join(
+            os.tmpdir(),
+            fileName
+        );
 
         // ===============================
         // DOWNLOAD MP3
         // ===============================
-        await ytdlp(
-            url,
-            {
-                ...YTDLP_COMMON,
+        await ytdlp(url, {
 
-                extractAudio: true,
+            ...YTDLP_COMMON,
 
-                audioFormat: "mp3",
+            extractAudio: true,
 
-                audioQuality: "128K",
+            audioFormat: "mp3",
 
-                output: filePath,
+            audioQuality: "128K",
 
-                ffmpegLocation: ffmpeg,
+            output: filePath,
 
-                extractorArgs:
-                    "youtube:player_client=web_safari"
-            }
-        );
+            ffmpegLocation: ffmpeg,
+
+            extractorArgs:
+                "youtube:player_client=web_safari"
+        });
 
         // ===============================
         // CHECK FILE
         // ===============================
         if (!fs.existsSync(filePath)) {
-            throw new Error("MP3 file was not created.");
+            throw new Error(
+                "MP3 file was not created."
+            );
         }
 
         const stats = fs.statSync(filePath);
 
         if (stats.size < 1000) {
-            throw new Error("Downloaded MP3 file is empty or invalid.");
+            throw new Error(
+                "Downloaded MP3 is empty."
+            );
         }
-
-        // ===============================
-        // READ AUDIO
-        // ===============================
-        const audioBuffer = fs.readFileSync(filePath);
 
         // ===============================
         // SEND AUDIO
         // ===============================
+        const audio = fs.readFileSync(filePath);
+
         await sock.sendMessage(
             chatId,
             {
-                audio: audioBuffer,
+                audio: audio,
 
                 mimetype: "audio/mpeg",
 
-                fileName: `${safeTitle}.mp3`,
+                fileName:
+                    `${safeTitle}.mp3`,
 
                 ptt: false,
 
@@ -204,13 +242,16 @@ async function songCommand(sock, chatId, message) {
                     externalAdReply: {
                         title: title,
 
-                        body: "🎵 Song Downloader",
+                        body:
+                            "🎵 Song Downloader",
 
-                        thumbnailUrl: thumbnail,
+                        thumbnailUrl:
+                            thumbnail,
 
                         mediaType: 2,
 
-                        renderLargerThumbnail: true,
+                        renderLargerThumbnail:
+                            true,
 
                         sourceUrl: url
                     }
@@ -222,44 +263,38 @@ async function songCommand(sock, chatId, message) {
         );
 
         // ===============================
-        // SUCCESS REACTION
+        // SUCCESS
         // ===============================
-        await sock.sendMessage(
-            chatId,
-            {
-                react: {
-                    text: "🎵",
-                    key: message.key
-                }
+        await sock.sendMessage(chatId, {
+            react: {
+                text: "🎵",
+                key: message.key
             }
-        );
+        });
 
         // ===============================
-        // DELETE TEMP FILE
+        // DELETE FILE
         // ===============================
         try {
             fs.unlinkSync(filePath);
-        } catch (e) {
-            console.log("Temp file cleanup failed:", e.message);
-        }
+        } catch {}
 
     } catch (error) {
 
-        console.error("SONG DOWNLOAD ERROR:", error);
+        console.error(
+            "SONG ERROR:",
+            error
+        );
 
-        // ===============================
-        // DELETE FILE IF ERROR
-        // ===============================
+        // Cleanup
         try {
             if (
-                typeof filePath !== "undefined" &&
+                filePath &&
                 fs.existsSync(filePath)
             ) {
                 fs.unlinkSync(filePath);
             }
-        } catch (e) {
-            console.log("Cleanup error:", e.message);
-        }
+        } catch {}
 
         await sock.sendMessage(
             chatId,
@@ -268,7 +303,9 @@ async function songCommand(sock, chatId, message) {
                     "❌ *Song Download Failed*\n\n" +
                     `${error?.message || "Unknown error"}`
             },
-            { quoted: message }
+            {
+                quoted: message
+            }
         );
     }
 }
