@@ -1,130 +1,35 @@
-const axios = require("axios");
+const ytdl = require("@pontalabs/ytdl");
 const yts = require("yt-search");
 
 
 
-async function ssaveExtract(url){
+function getText(message){
 
-    const res = await axios.post(
+    const msg = message?.message || {};
 
-        "https://api.ssave.cc/open/v1/extract",
-
-        {
-            url:url
-        },
-
-        {
-            timeout:60000,
-            headers:{
-                "User-Agent":"Mozilla/5.0",
-                "Content-Type":"application/json",
-                "Accept":"application/json"
-            }
-        }
-
-    );
-
-
-    return res.data;
+    return (
+        msg.conversation ||
+        msg.extendedTextMessage?.text ||
+        msg.imageMessage?.caption ||
+        msg.videoMessage?.caption ||
+        ""
+    ).trim();
 
 }
 
 
 
 
-
-async function ssaveDownload(id){
-
-    const res = await axios.get(
-
-        `https://api.ssave.cc/open/v1/download?id=${id}&type=hd`,
-
-        {
-
-            responseType:"arraybuffer",
-
-            timeout:120000,
-
-            headers:{
-                "User-Agent":"Mozilla/5.0"
-            }
-
-        }
-
-    );
-
-
-    return Buffer.from(res.data);
-
-}
-
-
-
-
-
-async function getVideo(url){
-
-    const data = await ssaveExtract(url);
-
-
-    console.log(
-        "SSAVE RESPONSE:",
-        JSON.stringify(data)
-    );
-
-
-    const id =
-
-    data.id ||
-    data.token ||
-    data.videoId ||
-    data.downloadId;
-
-
-
-    if(!id){
-
-        throw new Error(
-            "SSave ID not found"
-        );
-
-    }
-
-
-
-    const buffer =
-    await ssaveDownload(id);
-
-
-
-    return buffer;
-
-}
-
-
-
-
-
-
-
-async function videoCommand(sock,chatId,message){
+async function videoCommand(sock, chatId, message){
 
 try{
 
 
-const text =
-
-message.message?.conversation ||
-
-message.message?.extendedTextMessage?.text ||
-
-"";
+const text = getText(message);
 
 
-
-const query =
-
-text.replace(/^\.video\s*/i,"")
+const query = text
+.replace(/^\.video\s*/i,"")
 .trim();
 
 
@@ -134,7 +39,8 @@ if(!query){
 return sock.sendMessage(
 chatId,
 {
-text:"Use: .video video name"
+text:
+"🎥 Use:\n.video video name"
 },
 {
 quoted:message
@@ -142,6 +48,20 @@ quoted:message
 );
 
 }
+
+
+
+
+
+await sock.sendMessage(
+chatId,
+{
+react:{
+text:"🔎",
+key:message.key
+}
+}
+);
 
 
 
@@ -172,8 +92,16 @@ search.videos[0];
 await sock.sendMessage(
 chatId,
 {
-text:
-`🎥 Downloading:\n${video.title}`
+
+image:{
+url:video.thumbnail
+},
+
+caption:
+`🎥 *${video.title}*
+
+📥 Downloading...`
+
 },
 {
 quoted:message
@@ -184,9 +112,60 @@ quoted:message
 
 
 
-const buffer =
-await getVideo(video.url);
 
+// YTDL STREAM
+
+const stream =
+ytdl(video.url, {
+
+quality:"highestvideo"
+
+});
+
+
+
+
+
+const chunks = [];
+
+
+
+stream.on(
+"data",
+(chunk)=>{
+
+chunks.push(chunk);
+
+});
+
+
+
+
+
+stream.on(
+"end",
+async()=>{
+
+
+const buffer =
+Buffer.concat(chunks);
+
+
+
+console.log(
+"VIDEO SIZE:",
+buffer.length
+);
+
+
+
+if(buffer.length < 10000){
+
+throw new Error(
+"Invalid video buffer"
+);
+
+}
 
 
 
@@ -201,8 +180,11 @@ video:buffer,
 
 mimetype:"video/mp4",
 
+fileName:
+`${video.title}.mp4`,
+
 caption:
-`✅ ${video.title}`
+`✅ *${video.title}*`
 
 },
 
@@ -210,44 +192,58 @@ caption:
 quoted:message
 }
 
-);
-
-
-
-
-}
-catch(e){
-
-
-console.log(
-"VIDEO ERROR:",
-e.response?.data || e.message
 );
 
 
 
 await sock.sendMessage(
-
 chatId,
-
 {
+react:{
+text:"✅",
+key:message.key
+}
+}
+);
 
+
+
+});
+
+
+
+stream.on(
+"error",
+(err)=>{
+
+throw err;
+
+});
+
+
+
+
+
+}
+catch(error){
+
+
+console.log(
+"YTDL ERROR:",
+error
+);
+
+
+
+await sock.sendMessage(
+chatId,
+{
 text:
-
-`❌ Error:\n${
-e.response?.data
-?
-JSON.stringify(e.response.data)
-:
-e.message
-}`
-
+`❌ Video Failed\n\n${error.message}`
 },
-
 {
 quoted:message
 }
-
 );
 
 
