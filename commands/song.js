@@ -1,12 +1,7 @@
-const axios = require("axios");
+const ytdl = require("@pontalabs/ytdl");
 const yts = require("yt-search");
+const axios = require("axios");
 
-const TUNELIO_API_KEY = process.env.TUNELIO_API_KEY;
-
-
-// ===============================
-// GET TEXT FROM BAILEYS
-// ===============================
 function getText(message) {
 
     let msg = message?.message || message;
@@ -28,39 +23,26 @@ function getText(message) {
         msg.extendedTextMessage?.text ||
         msg.imageMessage?.caption ||
         msg.videoMessage?.caption ||
-        msg.documentMessage?.caption ||
         ""
     ).trim();
 }
 
 
 
-// ===============================
-// SONG COMMAND
-// ===============================
 async function songCommand(sock, chatId, message) {
 
     try {
 
-
         const text = getText(message);
-
-
-        console.log(
-            "SONG TEXT:",
-            text
-        );
-
 
         const query = text
             .replace(/^\.song\s*/i,"")
             .trim();
 
 
-
         if(!query){
 
-            return await sock.sendMessage(
+            return sock.sendMessage(
                 chatId,
                 {
                     text:
@@ -76,23 +58,9 @@ Example:
                     quoted:message
                 }
             );
-
         }
 
 
-
-        if(!TUNELIO_API_KEY){
-
-            throw new Error(
-                "TUNELIO_API_KEY missing"
-            );
-
-        }
-
-
-
-
-        // SEARCH YOUTUBE
 
         await sock.sendMessage(chatId,{
             react:{
@@ -103,9 +71,7 @@ Example:
 
 
 
-        const search =
-            await yts(query);
-
+        const search = await yts(query);
 
 
         if(!search.videos.length){
@@ -113,44 +79,25 @@ Example:
             throw new Error(
                 "Song not found"
             );
-
         }
 
 
+        const video = search.videos[0];
 
-        const video =
-            search.videos[0];
-
-
-        const url =
-            video.url;
-
-
-        const title =
-            video.title;
-
-
-        const thumbnail =
-            video.thumbnail;
-
-
-
-        // PREVIEW
+        const url = video.url;
 
 
         await sock.sendMessage(
             chatId,
             {
-
                 image:{
-                    url:thumbnail
+                    url:video.thumbnail
                 },
 
                 caption:
-`🎵 *${title}*
+`🎵 *${video.title}*
 
 📥 Downloading...`
-
             },
             {
                 quoted:message
@@ -159,92 +106,50 @@ Example:
 
 
 
-
-
-        // TUNELIO API REQUEST
-
-
-        console.log(
-            "Sending to Tunelio:",
-            url
-        );
+        await sock.sendMessage(chatId,{
+            react:{
+                text:"⏳",
+                key:message.key
+            }
+        });
 
 
 
-        const response =
-            await axios.post(
+        // GET MP3 URL
 
-                "https://tunelio.dev/create",
-
-                {
-                    url:url,
-                    quality:"mp3"
-                },
-
-                {
-
-                    headers:{
-
-                        Authorization:
-                        `Bearer ${TUNELIO_API_KEY}`,
-
-                        "Content-Type":
-                        "application/json"
-
-                    },
-
-                    timeout:120000
-                }
+        const result =
+            await ytdl.downloadAudio(
+                url,
+                128
             );
 
 
 
-
         console.log(
-            "TUNELIO RESPONSE:",
-            response.data
+            "YTDL AUDIO:",
+            result
         );
 
 
 
-
-        const downloadUrl =
-
-            response.data?.url ||
-
-            response.data?.download_url ||
-
-            response.data?.downloadUrl ||
-
-            response.data?.data?.url ||
-
-            response.data?.data?.download_url ||
-
-            response.data?.result?.url;
+        const audioUrl =
+            result?.download?.downloadUrl;
 
 
 
-
-        if(!downloadUrl){
+        if(!audioUrl){
 
             throw new Error(
-                "No download URL received from Tunelio"
+                "No audio URL received"
             );
-
         }
 
 
 
-
-
-        // DOWNLOAD AUDIO
-
-
-        const audioResponse =
+        const audio =
             await axios.get(
-                downloadUrl,
+                audioUrl,
                 {
-
                     responseType:
                     "arraybuffer",
 
@@ -254,73 +159,26 @@ Example:
 
 
 
-        const audio =
-            Buffer.from(
-                audioResponse.data
-            );
-
-
-
-
-        if(!audio.length){
-
-            throw new Error(
-                "Empty audio file"
-            );
-
-        }
-
-
-
-
-
-        // SEND AUDIO
-
-
         await sock.sendMessage(
             chatId,
             {
 
-                audio:audio,
+                audio:
+                Buffer.from(audio.data),
 
                 mimetype:
                 "audio/mpeg",
 
                 fileName:
-                `${title}.mp3`,
+                `${video.title}.mp3`,
 
-                ptt:false,
-
-
-                contextInfo:{
-
-                    externalAdReply:{
-
-                        title:title,
-
-                        body:
-                        "🎵 Song Downloader",
-
-                        thumbnailUrl:
-                        thumbnail,
-
-                        mediaType:2,
-
-                        renderLargerThumbnail:true,
-
-                        sourceUrl:url
-
-                    }
-
-                }
+                ptt:false
 
             },
             {
                 quoted:message
             }
         );
-
-
 
 
 
@@ -335,35 +193,26 @@ Example:
 
     } catch(error){
 
-
         console.log(
             "SONG ERROR:",
-            error.response?.data ||
-            error.message
+            error
         );
-
 
 
         await sock.sendMessage(
             chatId,
             {
-
                 text:
 `❌ *Song Download Failed*
 
-${error.response?.data?.message || error.message}`
-
+${error.message}`
             },
             {
                 quoted:message
             }
         );
-
-
     }
-
 }
-
 
 
 module.exports = songCommand;
