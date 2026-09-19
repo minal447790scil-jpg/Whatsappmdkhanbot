@@ -1,112 +1,262 @@
 const axios = require("axios");
 const yts = require("yt-search");
 
-// ===============================
-// SSAVE.CC DIRECT API (No MCP Server)
-// ===============================
-async function ssaveExtract(videoUrl) {
+
+
+async function ssaveExtract(url){
+
     const res = await axios.post(
+
         "https://api.ssave.cc/open/v1/extract",
-        { url: videoUrl },
+
         {
-            timeout: 30000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0',
-                'Content-Type': 'application/json'
+            url:url
+        },
+
+        {
+            timeout:60000,
+            headers:{
+                "User-Agent":"Mozilla/5.0",
+                "Content-Type":"application/json",
+                "Accept":"application/json"
             }
         }
+
     );
+
+
     return res.data;
+
 }
 
-async function ssaveDownload(token, type = "hd") {
+
+
+
+
+async function ssaveDownload(id){
+
     const res = await axios.get(
-        `https://api.ssave.cc/open/v1/download?id=${token}&type=${type}`,
+
+        `https://api.ssave.cc/open/v1/download?id=${id}&type=hd`,
+
         {
-            responseType: "arraybuffer",
-            timeout: 60000,
-            maxContentLength: 200 * 1024 * 1024,
-            headers: { 'User-Agent': 'Mozilla/5.0' }
-        }
-    );
-    return Buffer.from(res.data);
-}
 
-async function getSsaveVideo(youtubeUrl) {
-    const extract = await ssaveExtract(youtubeUrl);
-    const token = extract?.id || extract?.token;
-    
-    if (!token) {
-        throw new Error("Ssave extract failed - no token");
-    }
-    
-    const buffer = await ssaveDownload(token, "hd");
-    return { buffer, title: extract.title || "Video" };
-}
+            responseType:"arraybuffer",
 
-// ===============================
-// VIDEO COMMAND
-// ===============================
-async function videoCommand(sock, chatId, message) {
-    try {
-        const loadEmojis = ['📥', '⏳', '🎥'];
-        for (const emoji of loadEmojis) {
-            await sock.sendMessage(chatId, { react: { text: emoji, key: message.key } });
-        }
+            timeout:120000,
 
-        const messageContent = message.message?.ephemeralMessage?.message ||
-                             message.message?.viewOnceMessage?.message ||
-                             message.message?.viewOnceMessageV2?.message ||
-                             message.message;
-        const text = (messageContent.conversation ||
-                     messageContent.extendedTextMessage?.text ||
-                     messageContent.imageMessage?.caption ||
-                     messageContent.videoMessage?.caption || '').trim();
-        const query = text.replace(/^\.video\s+/i, '').trim();
-
-        if (!query || query.toLowerCase() === '.video') {
-            await sock.sendMessage(chatId, { text: 'Usage: .video <name or link>' }, { quoted: message });
-            return;
-        }
-
-        let videoUrl = '';
-        let videoTitle = '';
-        let videoThumbnail = '';
-
-        if (query.includes('youtube.com') || query.includes('youtu.be')) {
-            videoUrl = query;
-            videoTitle = 'YouTube Video';
-        } else {
-            const { videos } = await yts(query);
-            if (!videos || videos.length === 0) {
-                await sock.sendMessage(chatId, { text: 'No videos found!' }, { quoted: message });
-                return;
+            headers:{
+                "User-Agent":"Mozilla/5.0"
             }
-            videoUrl = videos[0].url;
-            videoTitle = videos[0].title;
-            videoThumbnail = videos[0].thumbnail;
+
         }
 
-        await sock.sendMessage(chatId, {
-            image: { url: videoThumbnail || 'https://i.postimg.cc/y6GV9P3H/file-000000004c307206bc366893b817568c-(1).png' },
-            caption: `🎥 Downloading: *${videoTitle}*`
-        }, { quoted: message });
+    );
 
-        // 🔥 Ssave se download
-        const result = await getSsaveVideo(videoUrl);
 
-        await sock.sendMessage(chatId, {
-            video: result.buffer,
-            mimetype: 'video/mp4',
-            caption: `*${videoTitle}*\n\n> *DOWNLOADED BY SALMAN*`
-        }, { quoted: message });
+    return Buffer.from(res.data);
 
-        await sock.sendMessage(chatId, { react: { text: '✅', key: message.key } });
-
-    } catch (error) {
-        console.error('Video error:', error);
-        await sock.sendMessage(chatId, { text: `❌ Error: ${error.message}` }, { quoted: message });
-    }
 }
+
+
+
+
+
+async function getVideo(url){
+
+    const data = await ssaveExtract(url);
+
+
+    console.log(
+        "SSAVE RESPONSE:",
+        JSON.stringify(data)
+    );
+
+
+    const id =
+
+    data.id ||
+    data.token ||
+    data.videoId ||
+    data.downloadId;
+
+
+
+    if(!id){
+
+        throw new Error(
+            "SSave ID not found"
+        );
+
+    }
+
+
+
+    const buffer =
+    await ssaveDownload(id);
+
+
+
+    return buffer;
+
+}
+
+
+
+
+
+
+
+async function videoCommand(sock,chatId,message){
+
+try{
+
+
+const text =
+
+message.message?.conversation ||
+
+message.message?.extendedTextMessage?.text ||
+
+"";
+
+
+
+const query =
+
+text.replace(/^\.video\s*/i,"")
+.trim();
+
+
+
+if(!query){
+
+return sock.sendMessage(
+chatId,
+{
+text:"Use: .video video name"
+},
+{
+quoted:message
+}
+);
+
+}
+
+
+
+
+
+const search =
+await yts(query);
+
+
+
+if(!search.videos.length){
+
+throw new Error(
+"No video found"
+);
+
+}
+
+
+
+const video =
+search.videos[0];
+
+
+
+
+
+await sock.sendMessage(
+chatId,
+{
+text:
+`🎥 Downloading:\n${video.title}`
+},
+{
+quoted:message
+}
+);
+
+
+
+
+
+const buffer =
+await getVideo(video.url);
+
+
+
+
+
+await sock.sendMessage(
+
+chatId,
+
+{
+
+video:buffer,
+
+mimetype:"video/mp4",
+
+caption:
+`✅ ${video.title}`
+
+},
+
+{
+quoted:message
+}
+
+);
+
+
+
+
+}
+catch(e){
+
+
+console.log(
+"VIDEO ERROR:",
+e.response?.data || e.message
+);
+
+
+
+await sock.sendMessage(
+
+chatId,
+
+{
+
+text:
+
+`❌ Error:\n${
+e.response?.data
+?
+JSON.stringify(e.response.data)
+:
+e.message
+}`
+
+},
+
+{
+quoted:message
+}
+
+);
+
+
+}
+
+
+
+}
+
+
 
 module.exports = videoCommand;
