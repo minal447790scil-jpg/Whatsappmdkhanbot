@@ -1,18 +1,9 @@
-const ytdl = require("@pontalabs/ytdl");
+const ytdl = require("shadowx-ytdl");
 const yts = require("yt-search");
 const axios = require("axios");
 
-const ffmpeg = require("fluent-ffmpeg");
-const ffmpegPath = require("ffmpeg-static");
 
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-
-ffmpeg.setFfmpegPath(ffmpegPath);
-
-
-
+// GET MESSAGE TEXT
 function getText(message) {
 
     let msg = message?.message || message;
@@ -40,13 +31,7 @@ function getText(message) {
 
 
 
-
 async function videoCommand(sock, chatId, message) {
-
-
-let inputFile;
-let outputFile;
-
 
 try {
 
@@ -66,7 +51,10 @@ return sock.sendMessage(
 chatId,
 {
 text:
-"🎥 Usage:\n.video video name"
+`🎥 *Video Downloader*
+
+Usage:
+.video video name`
 },
 {
 quoted:message
@@ -74,7 +62,6 @@ quoted:message
 );
 
 }
-
 
 
 
@@ -87,9 +74,9 @@ key:message.key
 
 
 
+// SEARCH
 
 const search = await yts(query);
-
 
 
 if(!search.videos.length){
@@ -101,12 +88,12 @@ throw new Error(
 }
 
 
-
 const video = search.videos[0];
 
 
 
 
+// PREVIEW
 
 await sock.sendMessage(
 chatId,
@@ -127,9 +114,22 @@ quoted:message
 
 
 
+await sock.sendMessage(chatId,{
+react:{
+text:"⏳",
+key:message.key
+}
+});
 
 
-// PONTALABS DOWNLOAD
+
+
+// SHADOWX YTDL
+
+console.log(
+"Downloading:",
+video.url
+);
 
 
 const result =
@@ -141,21 +141,23 @@ video.url,
 
 
 console.log(
-"YTDL RESULT:",
+"SHADOWX RESULT:",
 result
 );
 
 
 
-const downloadUrl =
-result?.download?.downloadUrl;
+const videoUrl =
+result?.download?.downloadUrl ||
+result?.url ||
+result?.downloadUrl;
 
 
 
-if(!downloadUrl){
+if(!videoUrl){
 
 throw new Error(
-"No download URL"
+"No download URL received"
 );
 
 }
@@ -163,13 +165,11 @@ throw new Error(
 
 
 
+// GET FILE
 
-// Download file
-
-
-const response =
+const file =
 await axios.get(
-downloadUrl,
+videoUrl,
 {
 responseType:"arraybuffer",
 timeout:300000
@@ -179,7 +179,7 @@ timeout:300000
 
 
 const buffer =
-Buffer.from(response.data);
+Buffer.from(file.data);
 
 
 
@@ -195,73 +195,13 @@ throw new Error(
 
 
 
-// TEMP FILES
-
-
-inputFile =
-path.join(
-os.tmpdir(),
-`input_${Date.now()}.mp4`
-);
-
-
-outputFile =
-path.join(
-os.tmpdir(),
-`output_${Date.now()}.mp4`
-);
-
-
-
-
-fs.writeFileSync(
-inputFile,
-buffer
-);
-
-
-
-
-
-// ONLY REMUX (NO CONVERSION)
-
-
-await new Promise((resolve,reject)=>{
-
-
-ffmpeg(inputFile)
-
-.outputOptions([
-"-c copy",
-"-movflags +faststart"
-])
-
-.save(outputFile)
-
-.on("end",resolve)
-
-.on("error",reject);
-
-
-});
-
-
-
-
-
-const finalVideo =
-fs.readFileSync(outputFile);
-
-
-
-
+// SEND VIDEO
 
 await sock.sendMessage(
 chatId,
 {
 
-video:
-finalVideo,
+video:buffer,
 
 mimetype:
 "video/mp4",
@@ -279,7 +219,6 @@ caption:
 quoted:message
 }
 );
-
 
 
 
@@ -319,25 +258,6 @@ quoted:message
 
 
 }
-
-finally{
-
-
-try{
-
-if(inputFile && fs.existsSync(inputFile))
-fs.unlinkSync(inputFile);
-
-
-if(outputFile && fs.existsSync(outputFile))
-fs.unlinkSync(outputFile);
-
-
-}catch(e){}
-
-
-}
-
 
 
 }
