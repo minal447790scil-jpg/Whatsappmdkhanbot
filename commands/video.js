@@ -1,9 +1,18 @@
 const yts = require("yt-search");
 const ytdlp = require("youtube-dl-exec");
-const ffmpeg = require("ffmpeg-static");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const ffmpeg = require("ffmpeg-static");
+
+const YTDLP_COMMON = {
+    jsRuntimes: "deno",
+    remoteComponents: "ejs:github",
+    noPlaylist: true,
+    noWarnings: false,
+    socketTimeout: 60,
+    retries: 2
+};
 
 
 async function videoCommand(sock, chatId, message) {
@@ -12,22 +21,32 @@ async function videoCommand(sock, chatId, message) {
 
     try {
 
+        // =========================
+        // REACTIONS
+        // =========================
+
         for (const emoji of ["📥", "⏳", "🎥"]) {
-            await sock.sendMessage(chatId, {
-                react: {
-                    text: emoji,
-                    key: message.key
-                }
-            });
+
+            try {
+                await sock.sendMessage(chatId, {
+                    react: {
+                        text: emoji,
+                        key: message.key
+                    }
+                });
+            } catch {}
         }
 
+
+        // =========================
+        // MESSAGE
+        // =========================
 
         const messageContent =
             message.message?.ephemeralMessage?.message ||
             message.message?.viewOnceMessage?.message ||
             message.message?.viewOnceMessageV2?.message ||
             message.message;
-
 
         const text = (
             messageContent?.conversation ||
@@ -44,109 +63,157 @@ async function videoCommand(sock, chatId, message) {
 
 
         if (!query) {
-            return await sock.sendMessage(chatId,{
-                text:
-                "❌ Use:\n.video <video name/link>"
-            },{
-                quoted:message
-            });
+
+            await sock.sendMessage(
+                chatId,
+                {
+                    text:
+                        "🎥 *Video Downloader*\n\n" +
+                        "Usage:\n" +
+                        ".video <video name or YouTube link>"
+                },
+                {
+                    quoted: message
+                }
+            );
+
+            return;
         }
 
 
+        // =========================
+        // SEARCH
+        // =========================
 
         let url;
         let title = "YouTube Video";
         let thumbnail = "";
+        let duration = "Unknown";
 
 
-
-        if(
+        if (
             query.includes("youtube.com") ||
             query.includes("youtu.be")
-        ){
+        ) {
 
             url = query;
 
-
             try {
 
-                const info = await ytdlp(url,{
-                    dumpSingleJson:true,
-                    noPlaylist:true,
-                    extractorArgs:
-                    "youtube:player_client=android"
+                const info = await ytdlp(url, {
+
+                    ...YTDLP_COMMON,
+
+                    dumpSingleJson: true,
+
+                    skipDownload: true
+
                 });
 
-
                 title =
-                info.title || title;
+                    info.title ||
+                    title;
 
                 thumbnail =
-                info.thumbnail || "";
+                    info.thumbnail ||
+                    "";
 
-            } catch(e){}
+                duration =
+                    info.duration_string ||
+                    "Unknown";
 
+            } catch (err) {
 
+                console.log(
+                    "[VIDEO INFO ERROR]",
+                    err.message
+                );
+            }
 
         } else {
 
+            const search =
+                await yts(query);
 
-            const search = await yts(query);
 
+            if (!search?.videos?.length) {
 
-            if(!search.videos.length){
-
-                throw new Error(
-                    "No video found"
+                await sock.sendMessage(
+                    chatId,
+                    {
+                        text:
+                            "❌ No video found."
+                    },
+                    {
+                        quoted: message
+                    }
                 );
 
+                return;
             }
 
 
-            const video = search.videos[0];
+            const video =
+                search.videos[0];
 
 
             url = video.url;
-            title = video.title;
-            thumbnail = video.thumbnail;
 
+            title =
+                video.title;
+
+            thumbnail =
+                video.thumbnail || "";
+
+            duration =
+                video.timestamp ||
+                "Unknown";
         }
 
 
+        // =========================
+        // PREVIEW
+        // =========================
 
+        if (thumbnail) {
 
-        // Preview
+            await sock.sendMessage(
+                chatId,
+                {
+                    image: {
+                        url: thumbnail
+                    },
 
-        if(thumbnail){
-
-            await sock.sendMessage(chatId,{
-                image:{
-                    url:thumbnail
+                    caption:
+                        `🎥 *${title}*\n` +
+                        `⏱️ *${duration}*\n\n` +
+                        `📥 Downloading video...`
                 },
-                caption:
-`🎥 *${title}*
-
-📥 Downloading video...`
-            },{
-                quoted:message
-            });
+                {
+                    quoted: message
+                }
+            );
 
         } else {
 
-            await sock.sendMessage(chatId,{
-                text:
-`🎥 *${title}*
-
-📥 Downloading video...`
-            },{
-                quoted:message
-            });
-
+            await sock.sendMessage(
+                chatId,
+                {
+                    text:
+                        `🎥 *${title}*\n` +
+                        `⏱️ *${duration}*\n\n` +
+                        `📥 Downloading video...`
+                },
+                {
+                    quoted: message
+                }
+            );
         }
 
 
-
-
+        // =========================
+        // TEMP FILE
+        // =========================
 
         filePath = path.join(
             os.tmpdir(),
@@ -154,122 +221,156 @@ async function videoCommand(sock, chatId, message) {
         );
 
 
-
         console.log(
-            "Downloading:",
+            "[VIDEO] Downloading:",
             url
         );
 
 
+        // =========================
+        // DOWNLOAD
+        // =========================
 
-        await ytdlp(url,{
+        await ytdlp(url, {
+
+            ...YTDLP_COMMON,
 
             format:
-            "bestvideo+bestaudio/best",
+                "bestvideo+bestaudio/best",
 
             mergeOutputFormat:
-            "mp4",
+                "mp4",
 
             output:
-            filePath,
-
-            noPlaylist:true,
+                filePath,
 
             ffmpegLocation:
-            ffmpeg,
+                ffmpeg,
 
             extractorArgs:
-            "youtube:player_client=android"
-
+                "youtube:player_client=web_safari"
         });
 
 
+        // =========================
+        // CHECK
+        // =========================
 
-
-
-        if(!fs.existsSync(filePath)){
+        if (!fs.existsSync(filePath)) {
 
             throw new Error(
-                "Video file not created"
+                "MP4 file was not created."
             );
-
         }
 
 
+        const stats =
+            fs.statSync(filePath);
+
+
+        if (stats.size < 10000) {
+
+            throw new Error(
+                "Downloaded video file is too small."
+            );
+        }
 
 
         const videoBuffer =
-        fs.readFileSync(filePath);
+            fs.readFileSync(filePath);
 
 
+        // =========================
+        // SAFE NAME
+        // =========================
+
+        const safeTitle =
+            title
+                .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
+                .replace(/\s+/g, " ")
+                .trim()
+                .substring(0, 80) ||
+            "video";
 
 
+        // =========================
+        // SEND
+        // =========================
 
-        await sock.sendMessage(chatId,{
+        await sock.sendMessage(
+            chatId,
+            {
 
-            video:
-            videoBuffer,
+                video:
+                    videoBuffer,
 
-            mimetype:
-            "video/mp4",
+                mimetype:
+                    "video/mp4",
 
-            fileName:
-            `${title}.mp4`,
+                fileName:
+                    `${safeTitle}.mp4`,
 
-            caption:
-`🎥 *${title}*
-
-> Downloaded by SALMAN KHAN`
-
-        },{
-            quoted:message
-        });
-
-
-
+                caption:
+                    `🎥 *${title}*\n` +
+                    `⏱️ *Duration:* ${duration}\n\n` +
+                    `> *Downloaded by SALMAN KHAN*`
+            },
+            {
+                quoted: message
+            }
+        );
 
 
-        await sock.sendMessage(chatId,{
-            react:{
-                text:"✅",
-                key:message.key
+        // =========================
+        // SUCCESS
+        // =========================
+
+        await sock.sendMessage(chatId, {
+            react: {
+                text: "✅",
+                key: message.key
             }
         });
 
 
-
-    } catch(error){
-
         console.log(
-            "VIDEO ERROR:",
+            "[VIDEO] Successfully sent"
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "[VIDEO ERROR]",
             error
         );
 
 
-        await sock.sendMessage(chatId,{
-            text:
-`❌ Video Download Failed
-
-${error.message}`
-        },{
-            quoted:message
-        });
-
+        await sock.sendMessage(
+            chatId,
+            {
+                text:
+                    `❌ *Video Download Failed*\n\n` +
+                    `${error.message}`
+            },
+            {
+                quoted: message
+            }
+        );
 
 
     } finally {
 
+        if (
+            filePath &&
+            fs.existsSync(filePath)
+        ) {
 
-        if(filePath && fs.existsSync(filePath)){
-
-            try{
+            try {
                 fs.unlinkSync(filePath);
-            }catch{}
-
+            } catch {}
         }
-
     }
-
 }
 
 
