@@ -17,7 +17,7 @@
     "@lmna22/aio-downloader": "latest",
     "@pontalabs/ytdl": "latest",
     "shadowx-ytdl": "latest",
-    "yt-dlp-exec": "latest"
+    "yt-dlp-exec": "latest",
     "axios": "^1.6.0",
      "axios": "^1.8.4",
     "@distube/ytdl-core": "latest",
