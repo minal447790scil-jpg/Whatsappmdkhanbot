@@ -27,7 +27,7 @@ function convertWhatsApp(input){
 
     return new Promise((resolve,reject)=>{
 
-        const output="./wa_video.mp4";
+        const output="./wa_ready.mp4";
 
         ffmpeg(input)
         .videoCodec("libx264")
@@ -38,13 +38,63 @@ function convertWhatsApp(input){
             "-movflags +faststart",
             "-pix_fmt yuv420p"
         ])
-
         .on("end",()=>resolve(output))
-        .on("error",(err)=>reject(err))
-
+        .on("error",(e)=>reject(e))
         .save(output);
 
     });
+
+}
+
+
+
+
+async function getDownload(videoUrl){
+
+    const qualities=[
+        720,
+        480,
+        360
+    ];
+
+
+    for(const q of qualities){
+
+        try{
+
+            const result =
+            await ytdl.downloadVideo(
+                videoUrl,
+                q
+            );
+
+
+            if(
+                result?.download?.status === true &&
+                result?.download?.downloadUrl
+            ){
+
+                return result.download.downloadUrl;
+
+            }
+
+
+        }catch(e){
+
+            console.log(
+                "QUALITY FAIL",
+                q,
+                e.message
+            );
+
+        }
+
+    }
+
+
+    throw new Error(
+        "Downloader failed to process this video"
+    );
 
 }
 
@@ -82,9 +132,7 @@ quoted:message
 
 
 
-
-
-const search = await yts(query);
+const search=await yts(query);
 
 
 
@@ -96,7 +144,7 @@ throw new Error("Video not found");
 
 
 
-const video = search.videos[0];
+const video=search.videos[0];
 
 
 
@@ -109,7 +157,9 @@ image:{
 url:video.thumbnail
 },
 caption:
-`🎥 ${video.title}\n\n⏳ Downloading...`
+`🎥 *${video.title}*
+
+⏳ Downloading...`
 },
 {
 quoted:message
@@ -121,59 +171,8 @@ quoted:message
 
 
 
-const result =
-await ytdl.downloadVideo(
-    video.url,
-    720
-);
-
-
-
-// LOG + WHATSAPP DEBUG
-
-console.log(
-"YTDL RESULT:",
-JSON.stringify(result,null,2)
-);
-
-
-
-await sock.sendMessage(
-chatId,
-{
-text:
-"📦 *YTDL RESULT*\n\n" +
-JSON.stringify(result,null,2).slice(0,3500)
-},
-{
-quoted:message
-}
-);
-
-
-
-
-
-
-const url =
-
-result?.download?.downloadUrl ||
-result?.download?.url ||
-result?.downloadUrl ||
-result?.videoUrl ||
-result?.video_url ||
-result?.url;
-
-
-
-if(!url){
-
-throw new Error(
-"Video URL not found in YTDL result"
-);
-
-}
-
+const downloadUrl =
+await getDownload(video.url);
 
 
 
@@ -183,9 +182,9 @@ const raw="./raw.mp4";
 
 
 
-const file =
+const res =
 await axios.get(
-url,
+downloadUrl,
 {
 responseType:"arraybuffer",
 timeout:300000
@@ -196,9 +195,8 @@ timeout:300000
 
 fs.writeFileSync(
 raw,
-Buffer.from(file.data)
+Buffer.from(res.data)
 );
-
 
 
 
@@ -212,11 +210,10 @@ try{
 finalFile =
 await convertWhatsApp(raw);
 
-}
-catch(e){
+}catch(e){
 
 console.log(
-"FFMPEG ERROR:",
+"CONVERT ERROR:",
 e.message
 );
 
@@ -233,7 +230,6 @@ fs.readFileSync(finalFile);
 
 
 
-
 await sock.sendMessage(
 chatId,
 {
@@ -241,7 +237,9 @@ video:buffer,
 mimetype:"video/mp4",
 fileName:"video.mp4",
 caption:
-`🎥 ${video.title}\n\n✅ Done`
+`🎥 *${video.title}*
+
+✅ DOWNLOADED BY SALMAN`
 },
 {
 quoted:message
@@ -251,10 +249,17 @@ quoted:message
 
 
 
+if(fs.existsSync(raw))
+fs.unlinkSync(raw);
+
+
+if(finalFile!==raw && fs.existsSync(finalFile))
+fs.unlinkSync(finalFile);
+
+
 
 }
 catch(err){
-
 
 console.log(
 "VIDEO ERROR:",
@@ -262,24 +267,23 @@ err
 );
 
 
-
 await sock.sendMessage(
 chatId,
 {
 text:
-`❌ *VIDEO ERROR*\n\n${err.message}`
+`❌ *Video Failed*
+
+${err.message}`
 },
 {
 quoted:message
 }
 );
 
-
 }
 
 
 }
 
 
-
-module.exports = videoCommand;
+module.exports=videoCommand;
