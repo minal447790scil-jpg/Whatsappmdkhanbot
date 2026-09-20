@@ -41,17 +41,8 @@ function convertWhatsApp(input){
             "-pix_fmt yuv420p"
         ])
 
-        .on("end",()=>{
-
-            resolve(output);
-
-        })
-
-        .on("error",(err)=>{
-
-            reject(err);
-
-        })
+        .on("end",()=>resolve(output))
+        .on("error",(err)=>reject(err))
 
         .save(output);
 
@@ -93,7 +84,9 @@ quoted:message
 
 
 
+
 const search=await yts(query);
+
 
 
 if(!search.videos.length){
@@ -105,7 +98,6 @@ throw new Error("Video not found");
 
 
 const video=search.videos[0];
-
 
 
 
@@ -127,12 +119,20 @@ quoted:message
 
 
 
-// SAME WORKING METHOD
-
 const result =
 await ytdl.downloadVideo(
-    video.url,
-    720
+video.url,
+720
+);
+
+
+
+
+
+// DEBUG RESULT
+console.log(
+"VIDEO RESULT:",
+JSON.stringify(result,null,2)
 );
 
 
@@ -141,15 +141,20 @@ await ytdl.downloadVideo(
 
 const url =
 result?.download?.downloadUrl ||
+result?.download?.url ||
 result?.downloadUrl ||
-result?.url;
+result?.videoUrl ||
+result?.video_url ||
+result?.url ||
+result?.data?.downloadUrl ||
+result?.data?.url;
 
 
 
 if(!url){
 
 throw new Error(
-"Video URL not found"
+"Video URL not found from downloader"
 );
 
 }
@@ -167,7 +172,7 @@ await axios.get(
 url,
 {
 responseType:"arraybuffer",
-timeout:180000
+timeout:300000
 }
 );
 
@@ -180,22 +185,20 @@ Buffer.from(file.data)
 
 
 
-let finalFile=raw;
 
+let finalFile=raw;
 
 
 try{
 
-
 finalFile =
 await convertWhatsApp(raw);
-
 
 }
 catch(e){
 
 console.log(
-"Conversion failed:",
+"FFMPEG SKIPPED:",
 e.message
 );
 
@@ -219,7 +222,7 @@ video:buffer,
 mimetype:"video/mp4",
 fileName:"video.mp4",
 caption:
-`🎥 ${video.title}\n\n✅ Downloaded By SALMAN`
+`🎥 ${video.title}\n\n✅ DOWNLOADED BY SALMAN`
 },
 {
 quoted:message
@@ -266,7 +269,6 @@ quoted:message
 
 
 }
-
 
 
 module.exports=videoCommand;
