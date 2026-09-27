@@ -10,7 +10,7 @@ async function followCommand(sock, from, msg, isAdmin, sessions, args) {
     let inviteCode = channelLink.split('/').pop();
     if (!inviteCode) return await sock.sendMessage(from, { text: "❌ Invalid channel link." }, { quoted: msg });
 
-    await sock.sendMessage(from, { text: `🚀 Starting unlimited follow process for: ${inviteCode}\npowerd by old-hacker` }, { quoted: msg });
+    await sock.sendMessage(from, { text: `🚀 Starting unlimited follow process for: ${inviteCode}\npowerd by Salman Khan` }, { quoted: msg });
 
     const activeSessions = Object.values(sessions).filter(s => s.isConnected && s.sock);
     let successCount = 0;
