@@ -6,22 +6,25 @@ const crypto = require("crypto");
 
 const TMP_DIR = path.join(__dirname, "tmp_tiktok");
 
-// Create temp folder
 if (!fs.existsSync(TMP_DIR)) {
     fs.mkdirSync(TMP_DIR, { recursive: true });
 }
 
+
+// ==========================================
+// GET MESSAGE TEXT
+// ==========================================
+
 function getText(message) {
+
     let msg = message?.message;
 
     if (!msg) return "";
 
-    // Ephemeral
     if (msg.ephemeralMessage?.message) {
         msg = msg.ephemeralMessage.message;
     }
 
-    // View once
     if (msg.viewOnceMessage?.message) {
         msg = msg.viewOnceMessage.message;
     }
@@ -35,67 +38,86 @@ function getText(message) {
     );
 }
 
+
+// ==========================================
+// EXTRACT VIDEO URL
+// ==========================================
+
 function extractVideoUrl(data) {
+
     if (!data) return null;
 
-    // Direct string
     if (typeof data === "string") {
-        return data;
+        return /^https?:\/\//i.test(data) ? data : null;
     }
 
-    // Function response
-    if (typeof data === "function") {
-        return null;
-    }
+    const urls = [
 
-    // Common direct fields
-    const possible = [
         data.video,
         data.video_url,
         data.videoUrl,
+
         data.download,
         data.download_url,
         data.downloadUrl,
+
         data.url,
+
         data.play,
         data.nowm,
+
         data.no_watermark,
         data.noWatermark,
 
-        // nested data
         data.data?.video,
         data.data?.video_url,
         data.data?.videoUrl,
+
         data.data?.download,
         data.data?.download_url,
         data.data?.downloadUrl,
+
         data.data?.url,
+
         data.data?.play,
         data.data?.nowm,
+
         data.data?.no_watermark,
         data.data?.noWatermark,
 
-        // result
         data.result?.video,
         data.result?.video_url,
         data.result?.videoUrl,
+
         data.result?.download,
+        data.result?.download_url,
+        data.result?.downloadUrl,
+
         data.result?.url,
+
         data.result?.play,
         data.result?.nowm,
 
-        // result.data
         data.result?.data?.video,
         data.result?.data?.video_url,
         data.result?.data?.videoUrl,
+
         data.result?.data?.download,
+        data.result?.data?.download_url,
+        data.result?.data?.downloadUrl,
+
         data.result?.data?.url,
+
         data.result?.data?.play,
         data.result?.data?.nowm
     ];
 
-    for (let url of possible) {
-        if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+    for (const url of urls) {
+
+        if (
+            typeof url === "string" &&
+            /^https?:\/\//i.test(url)
+        ) {
             return url;
         }
     }
@@ -103,7 +125,13 @@ function extractVideoUrl(data) {
     return null;
 }
 
+
+// ==========================================
+// RESOLVE FUNCTION
+// ==========================================
+
 async function resolveValue(value) {
+
     if (typeof value === "function") {
         return await value();
     }
@@ -111,27 +139,41 @@ async function resolveValue(value) {
     return value;
 }
 
+
+// ==========================================
+// DOWNLOAD VIDEO
+// ==========================================
+
 async function downloadVideo(url, filePath) {
+
     const response = await axios({
         method: "GET",
         url,
+
         responseType: "stream",
+
         timeout: 120000,
+
+        maxRedirects: 10,
 
         headers: {
             "User-Agent":
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) " +
                 "Chrome/140.0.0.0 Safari/537.36",
+
             "Accept": "*/*",
+
             "Referer": "https://www.tiktok.com/"
         },
 
-        maxRedirects: 10,
-        validateStatus: status => status >= 200 && status < 400
+        validateStatus: status =>
+            status >= 200 && status < 400
     });
 
     return new Promise((resolve, reject) => {
+
         const writer = fs.createWriteStream(filePath);
 
         response.data.pipe(writer);
@@ -146,40 +188,119 @@ async function downloadVideo(url, filePath) {
     });
 }
 
+
+// ==========================================
+// TIKTOK COMMAND
+// ==========================================
+
 async function tiktokCommand(sock, chatId, message) {
+
     let filePath = null;
 
     try {
+
         const text = getText(message);
 
-        const query = text
-            .replace(/^\.(tiktok|tt)\s+/i, "")
+        console.log("========== RAW TIKTOK MESSAGE ==========");
+        console.log(text);
+
+        // ==========================================
+        // FIXED COMMAND PARSING
+        // Supports:
+        //
+        // .tt URL
+        // .tiktok URL
+        // Tiktok URL
+        // TikTok URL
+        // tt URL
+        // ==========================================
+
+        let query = text
+            .trim()
+            .replace(
+                /^(?:\.(?:tiktok|tt)|tiktok|tt)\s*:?\s*/i,
+                ""
+            )
             .trim();
 
+        // ==========================================
+        // IF USER JUST SENT URL
+        // ==========================================
+
         if (!query) {
+
+            const urlMatch = text.match(
+                /https?:\/\/(?:www\.)?(?:vt\.tiktok\.com|vm\.tiktok\.com|tiktok\.com|www\.tiktok\.com)\/[^\s]+/i
+            );
+
+            if (urlMatch) {
+                query = urlMatch[0];
+            }
+        }
+
+        // ==========================================
+        // REMOVE EXTRA TEXT AROUND URL
+        // ==========================================
+
+        const urlMatch = query.match(
+            /https?:\/\/(?:www\.)?(?:vt\.tiktok\.com|vm\.tiktok\.com|tiktok\.com)\/[^\s]+/i
+        );
+
+        if (urlMatch) {
+            query = urlMatch[0];
+        }
+
+        // Remove punctuation accidentally attached
+        query = query.replace(/[)\]}>,.!?]+$/g, "");
+
+        console.log("FINAL TIKTOK QUERY:", query);
+
+
+        // ==========================================
+        // EMPTY
+        // ==========================================
+
+        if (!query) {
+
             return await sock.sendMessage(
                 chatId,
                 {
-                    text: "❌ TikTok link do.\n\nExample:\n.tt https://www.tiktok.com/..."
+                    text:
+                        "❌ TikTok link do.\n\n" +
+                        "Example:\n" +
+                        "Tiktok https://vt.tiktok.com/xxxxx/"
                 },
                 { quoted: message }
             );
         }
 
-        // Validate TikTok URL
-        if (
-            !/^https?:\/\/(www\.)?(tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com)\//i.test(
-                query
-            )
-        ) {
+
+        // ==========================================
+        // VALIDATE TIKTOK URL
+        // ==========================================
+
+        const validTikTok =
+            /^https?:\/\/(?:www\.)?(?:tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)\//i
+                .test(query);
+
+        if (!validTikTok) {
+
             return await sock.sendMessage(
                 chatId,
                 {
-                    text: "❌ Valid TikTok link do."
+                    text:
+                        "❌ Valid TikTok link do.\n\n" +
+                        "Example:\n" +
+                        "https://vt.tiktok.com/xxxxx/"
                 },
                 { quoted: message }
             );
         }
+
+
+        // ==========================================
+        // DOWNLOADING REACTION
+        // ==========================================
 
         await sock.sendMessage(chatId, {
             react: {
@@ -188,42 +309,60 @@ async function tiktokCommand(sock, chatId, message) {
             }
         });
 
-        console.log("\n========== TIKTOK ==========");
+
+        console.log("\n========== TIKTOK DOWNLOAD ==========");
         console.log("URL:", query);
 
-        // ==============================
-        // TTDL
-        // ==============================
+
+        // ==========================================
+        // CALL TTDL
+        // ==========================================
 
         let result = await Promise.race([
+
             ttdl(query),
+
             new Promise((_, reject) =>
                 setTimeout(
-                    () => reject(new Error("TTDL timeout after 60 seconds")),
+                    () => reject(
+                        new Error(
+                            "TikTok downloader timeout after 60 seconds"
+                        )
+                    ),
                     60000
                 )
             )
         ]);
+
+
+        result = await resolveValue(result);
+
 
         console.log("TTDL RESULT:");
         console.dir(result, {
             depth: 10
         });
 
-        // Resolve function if package returns function
-        result = await resolveValue(result);
+
+        // ==========================================
+        // FIND VIDEO URL
+        // ==========================================
 
         let videoUrl = extractVideoUrl(result);
 
-        // ==============================
-        // Search deeper if necessary
-        // ==============================
+
+        // ==========================================
+        // DEEP SEARCH
+        // ==========================================
 
         if (!videoUrl && result && typeof result === "object") {
+
             const queue = [result];
+
             const visited = new Set();
 
             while (queue.length && !videoUrl) {
+
                 const current = queue.shift();
 
                 if (
@@ -237,6 +376,7 @@ async function tiktokCommand(sock, chatId, message) {
                 visited.add(current);
 
                 for (const key of Object.keys(current)) {
+
                     let value;
 
                     try {
@@ -245,33 +385,47 @@ async function tiktokCommand(sock, chatId, message) {
                         continue;
                     }
 
+
                     if (
                         typeof value === "string" &&
-                        /^https?:\/\//i.test(value) &&
-                        /\.(mp4|m3u8)(\?|$)/i.test(value)
+                        /^https?:\/\//i.test(value)
                     ) {
-                        videoUrl = value;
-                        break;
+
+                        if (
+                            /\.(mp4|m3u8)(\?|$)/i.test(value) ||
+                            /video|play|download|nowm/i.test(key)
+                        ) {
+                            videoUrl = value;
+                            break;
+                        }
                     }
 
-                    if (value && typeof value === "object") {
+
+                    if (
+                        value &&
+                        typeof value === "object"
+                    ) {
                         queue.push(value);
                     }
                 }
             }
         }
 
+
         console.log("FINAL VIDEO URL:", videoUrl);
 
+
+        // ==========================================
+        // NO URL
+        // ==========================================
+
         if (!videoUrl) {
-            console.log("❌ No video URL found");
 
             await sock.sendMessage(
                 chatId,
                 {
                     text:
-                        "❌ TikTok video download link nahi mili.\n\n" +
-                        "TikTok ya downloader response change ho sakta hai."
+                        "❌ TikTok video download link nahi mili."
                 },
                 { quoted: message }
             );
@@ -286,9 +440,10 @@ async function tiktokCommand(sock, chatId, message) {
             return;
         }
 
-        // ==============================
-        // Download locally
-        // ==============================
+
+        // ==========================================
+        // DOWNLOAD TO LOCAL FILE
+        // ==========================================
 
         const filename =
             "tiktok_" +
@@ -297,31 +452,62 @@ async function tiktokCommand(sock, chatId, message) {
             crypto.randomBytes(4).toString("hex") +
             ".mp4";
 
-        filePath = path.join(TMP_DIR, filename);
+        filePath = path.join(
+            TMP_DIR,
+            filename
+        );
 
-        console.log("Downloading:", filePath);
 
-        await downloadVideo(videoUrl, filePath);
+        console.log("Downloading video...");
+
+        await downloadVideo(
+            videoUrl,
+            filePath
+        );
+
+
+        // ==========================================
+        // CHECK FILE
+        // ==========================================
 
         if (!fs.existsSync(filePath)) {
-            throw new Error("Downloaded file does not exist");
+            throw new Error(
+                "Downloaded video file not found"
+            );
         }
 
-        const stats = fs.statSync(filePath);
+
+        const stats =
+            fs.statSync(filePath);
+
 
         console.log(
-            "Downloaded size:",
-            (stats.size / 1024 / 1024).toFixed(2),
+            "Video size:",
+            (
+                stats.size /
+                1024 /
+                1024
+            ).toFixed(2),
             "MB"
         );
 
+
         if (stats.size < 5000) {
-            throw new Error("Downloaded file is too small / invalid");
+
+            throw new Error(
+                "Downloaded file is invalid or empty"
+            );
         }
 
-        // ==============================
-        // Send to WhatsApp
-        // ==============================
+
+        // ==========================================
+        // SEND VIDEO
+        // ==========================================
+
+        console.log(
+            "Sending video to WhatsApp..."
+        );
+
 
         await sock.sendMessage(
             chatId,
@@ -332,12 +518,19 @@ async function tiktokCommand(sock, chatId, message) {
 
                 mimetype: "video/mp4",
 
-                caption: "✅ TIKTOK DOWNLOADED BY SALMAN"
+                caption:
+                    "✅ TIKTOK DOWNLOADED BY SALMAN"
             },
-            { quoted: message }
+            {
+                quoted: message
+            }
         );
 
-        console.log("✅ TikTok sent successfully");
+
+        console.log(
+            "✅ TIKTOK SENT SUCCESSFULLY"
+        );
+
 
         await sock.sendMessage(chatId, {
             react: {
@@ -346,21 +539,38 @@ async function tiktokCommand(sock, chatId, message) {
             }
         });
 
+
     } catch (error) {
-        console.error("\n========== TIKTOK ERROR ==========");
-        console.error(error);
-        console.error(error?.stack);
+
+        console.error(
+            "\n========== TIKTOK ERROR =========="
+        );
+
+        console.error(
+            error?.message || error
+        );
+
+        console.error(
+            error?.stack || ""
+        );
+
 
         try {
+
             await sock.sendMessage(
                 chatId,
                 {
                     text:
                         "❌ TikTok download failed.\n\n" +
-                        `Reason: ${error?.message || "Unknown error"}`
+                        "Reason: " +
+                        (error?.message ||
+                            "Unknown error")
                 },
-                { quoted: message }
+                {
+                    quoted: message
+                }
             );
+
 
             await sock.sendMessage(chatId, {
                 react: {
@@ -368,25 +578,36 @@ async function tiktokCommand(sock, chatId, message) {
                     key: message.key
                 }
             });
+
         } catch (sendError) {
+
             console.error(
-                "Failed to send error message:",
+                "Error sending error message:",
                 sendError
             );
         }
 
     } finally {
-        // ==============================
-        // Delete temporary file
-        // ==============================
+
+        // ==========================================
+        // DELETE TEMP FILE
+        // ==========================================
 
         if (filePath) {
+
             try {
-                if (fs.existsSync(filePath)) {
+
+                if (
+                    fs.existsSync(filePath)
+                ) {
                     fs.unlinkSync(filePath);
-                    console.log("🗑️ Temp file deleted");
+                    console.log(
+                        "🗑️ Temporary file deleted"
+                    );
                 }
+
             } catch (cleanupError) {
+
                 console.error(
                     "Cleanup error:",
                     cleanupError.message
@@ -395,5 +616,6 @@ async function tiktokCommand(sock, chatId, message) {
         }
     }
 }
+
 
 module.exports = tiktokCommand;
