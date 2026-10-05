@@ -51,7 +51,8 @@
     "long": "^5.2.3",
     "ws": "^8.18.3",
        "youtube-dl-exec": "^3.1.15",
-    "ffprobe-static": "^3.1.0"
+    "ffprobe-static": "^3.1.0",
+    "ruhend-scraper": "^10.0.3"
     
   },
   "devDependencies": {
