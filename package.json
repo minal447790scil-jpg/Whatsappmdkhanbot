@@ -53,7 +53,8 @@
        "youtube-dl-exec": "^3.1.15",
     "ffprobe-static": "^3.1.0",
     "ab-downloader": "latest",
-    "ruhend-scraper": "latest"
+    "ruhend-scraper": "latest",
+    "instagram-url-direct": "latest"
     
   },
   "devDependencies": {
