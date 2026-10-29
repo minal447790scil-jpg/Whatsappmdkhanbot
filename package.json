@@ -54,7 +54,8 @@
     "ffprobe-static": "^3.1.0",
     "ab-downloader": "latest",
     "ruhend-scraper": "latest",
-    "instagram-url-direct": "latest"
+    "instagram-url-direct": "latest",
+    "youtube-dl-exec": "latest"
     
   },
   "devDependencies": {
