@@ -1,235 +1,472 @@
 
-const { igdl } = require("ruhend-scraper");
+const dns = require("dns");
+const { igdl: abIgdl } = require("ab-downloader");
 
-async function instagramCommand(sock, chatId, message) {
-    let downloadData = null;
+let ruhendIgdl = null;
+
+try {
+    ruhendIgdl = require("ruhend-scraper").igdl;
+} catch {
+    // Optional fallback package is not installed.
+}
+
+const PREFIX = "[INSTAGRAM]";
+const MAX_LOG_LENGTH = 3000;
+const MAX_MEDIA_ITEMS = 10;
+const TIMEOUT_MS = 45000;
+
+function log(level, message, extra = "") {
+    const time = new Date().toISOString();
+    console.log(
+        `[${time}] ${PREFIX} [${level}] ${message}`,
+        extra || ""
+    );
+}
+
+function getErrorDetails(err) {
+    return [
+        `Message: ${err?.message || String(err)}`,
+        `Code: ${err?.code || "N/A"}`,
+        `Name: ${err?.name || "Error"}`,
+        err?.stack ? `Stack:\n${err.stack}` : ""
+    ].filter(Boolean).join("\n");
+}
+
+async function sendWhatsAppLog(sock, chatId, message) {
+    const text = String(message || "Unknown error");
+
+    for (let i = 0; i < text.length; i += MAX_LOG_LENGTH) {
+        const chunk = text.slice(i, i + MAX_LOG_LENGTH);
+
+        try {
+            await sock.sendMessage(chatId, {
+                text: `🛠️ INSTAGRAM BOT LOG\n\n${chunk}`
+            });
+        } catch (err) {
+            log("ERROR", "Could not send log to WhatsApp", err.message);
+        }
+    }
+}
+
+function extractText(message) {
+    const root = message?.message || {};
+
+    // Handle common WhatsApp message wrappers.
+    const msg =
+        root.ephemeralMessage?.message ||
+        root.viewOnceMessage?.message ||
+        root.viewOnceMessageV2?.message ||
+        root;
+
+    return (
+        msg.conversation ||
+        msg.extendedTextMessage?.text ||
+        msg.imageMessage?.caption ||
+        msg.videoMessage?.caption ||
+        root.conversation ||
+        root.extendedTextMessage?.text ||
+        ""
+    ).trim();
+}
+
+function getInstagramUrl(text) {
+    const match = text.match(
+        /https?:\/\/(?:www\.|m\.)?instagram\.com\/[^\s]+/i
+    );
+
+    if (match) {
+        return match[0].replace(/[),.!]+$/, "");
+    }
+
+    return text.replace(
+        /^\.(?:insta|ig|instagram)\s+/i,
+        ""
+    ).trim();
+}
+
+function validateInstagramUrl(value) {
+    let url;
 
     try {
-        // Extract message text
-        const msg =
-            message.message?.ephemeralMessage?.message ||
-            message.message?.extendedTextMessage?.contextInfo?.quotedMessage ||
-            message.message;
+        url = new URL(value);
+    } catch {
+        throw new Error("Invalid URL. Please provide a valid Instagram link.");
+    }
 
-        const text =
-            msg?.conversation ||
-            msg?.extendedTextMessage?.text ||
-            message.message?.conversation ||
-            message.message?.extendedTextMessage?.text ||
-            "";
+    const host = url.hostname.toLowerCase();
 
-        // Extract Instagram URL
-        const match = text.match(
-            /https?:\/\/(?:www\.|m\.|)?instagram\.com\/[^\s]+/i
-        );
+    if (!["instagram.com", "www.instagram.com", "m.instagram.com"].includes(host)) {
+        throw new Error("Only public Instagram links are supported.");
+    }
 
-        const query = match
-            ? match[0].replace(/[),.!]+$/, "")
-            : text.replace(/^\.(insta|ig|instagram)\s+/i, "").trim();
+    if (!/^\/(p|reel|reels|tv|stories)\//i.test(url.pathname)) {
+        throw new Error("Unsupported Instagram URL type.");
+    }
 
-        if (!query) {
-            return await sock.sendMessage(
-                chatId,
-                {
-                    text:
-                        "❌ Instagram link do.\n\n" +
-                        "Example:\n" +
-                        ".ig https://www.instagram.com/reel/XXXXXXXX/"
-                },
-                { quoted: message }
-            );
-        }
+    url.hash = "";
+    return url.toString();
+}
 
-        // Validate URL
-        let parsedUrl;
+function withTimeout(promise, ms, label) {
+    let timer;
+
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            const err = new Error(`${label} timed out after ${ms} ms`);
+            err.code = "ETIMEDOUT";
+            reject(err);
+        }, ms);
+    });
+
+    return Promise.race([promise, timeout]).finally(() => {
+        clearTimeout(timer);
+    });
+}
+
+async function getMediaData(url) {
+    const errors = [];
+    const providers = [
+        ["ab-downloader", abIgdl],
+        ...(typeof ruhendIgdl === "function"
+            ? [["ruhend-scraper", ruhendIgdl]]
+            : [])
+    ];
+
+    for (const [name, downloader] of providers) {
+        log("INFO", `Trying provider: ${name}`);
 
         try {
-            parsedUrl = new URL(query);
-        } catch {
-            return await sock.sendMessage(
-                chatId,
-                { text: "❌ Invalid URL. Sahi Instagram link do." },
-                { quoted: message }
+            const result = await withTimeout(
+                Promise.resolve().then(() => downloader(url)),
+                TIMEOUT_MS,
+                name
             );
-        }
 
-        if (
-            !["instagram.com", "www.instagram.com", "m.instagram.com"]
-                .includes(parsedUrl.hostname.toLowerCase())
-        ) {
-            return await sock.sendMessage(
-                chatId,
-                { text: "❌ Sirf Instagram links supported hain." },
-                { quoted: message }
-            );
-        }
+            if (result) {
+                log("INFO", `${name} returned a response`);
+                return { result, provider: name, errors };
+            }
 
-        // Keep the original URL and query parameters for testing.
-        const cleanUrl = parsedUrl.toString();
-
-        await sock.sendMessage(chatId, {
-            react: { text: "📥", key: message.key }
-        });
-
-        console.log("\n========== INSTAGRAM DOWNLOADER ==========");
-        console.log("[IG] URL:", cleanUrl);
-        console.log("[IG] Calling ruhend-scraper igdl...");
-
-        // Fetch media
-        try {
-            downloadData = await igdl(cleanUrl);
+            errors.push(`${name}: empty response`);
         } catch (err) {
-            console.error("[IG] igdl failed:", err);
-            console.error("[IG] Stack:", err?.stack);
+            const details = getErrorDetails(err);
+            errors.push(`${name}:\n${details}`);
+            log("ERROR", `${name} failed`, details);
+        }
+    }
 
-            throw new Error(
-                `Scraper failed: ${err?.message || String(err)}`
-            );
+    const error = new Error("All Instagram downloader providers failed.");
+    error.providerErrors = errors;
+    throw error;
+}
+
+function normalizeMedia(data) {
+    const output = [];
+    const visited = new Set();
+
+    function walk(value, depth = 0) {
+        if (!value || depth > 7 || output.length >= MAX_MEDIA_ITEMS) {
+            return;
         }
 
-        console.log(
-            "[IG] Raw response:",
-            JSON.stringify(downloadData, null, 2)
-        );
-
-        // Normalize result
-        let mediaList = [];
-
-        if (Array.isArray(downloadData)) {
-            mediaList = downloadData;
-        } else if (Array.isArray(downloadData?.data)) {
-            mediaList = downloadData.data;
-        } else if (Array.isArray(downloadData?.result)) {
-            mediaList = downloadData.result;
-        } else if (Array.isArray(downloadData?.urls)) {
-            mediaList = downloadData.urls;
-        } else if (downloadData) {
-            mediaList = [downloadData];
+        if (typeof value === "string") {
+            if (/^https?:\/\//i.test(value)) {
+                output.push({ url: value, type: "" });
+            }
+            return;
         }
 
-        if (!mediaList.length) {
-            throw new Error(
-                "Scraper returned no media. Check the URL and library response."
-            );
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                walk(item, depth + 1);
+            }
+            return;
         }
 
-        let sent = 0;
+        if (typeof value !== "object" || visited.has(value)) {
+            return;
+        }
 
-        for (const media of mediaList) {
-            try {
-                let mediaUrl = null;
-                let mediaType = "";
+        visited.add(value);
 
-                if (typeof media === "string") {
-                    mediaUrl = media;
-                } else if (media && typeof media === "object") {
-                    mediaUrl =
-                        media.url ||
-                        media.download_url ||
-                        media.downloadUrl ||
-                        media.video_url ||
-                        media.videoUrl ||
-                        media.image_url ||
-                        media.display_url ||
-                        media.src ||
-                        media.download ||
-                        media.video ||
-                        media.image ||
-                        media.link;
+        const type = String(
+            value.type ||
+            value.media_type ||
+            value.mime_type ||
+            ""
+        ).toLowerCase();
 
-                    mediaType = String(
-                        media.type || media.media_type || ""
-                    ).toLowerCase();
+        const urlKeys = [
+            "url",
+            "download_url",
+            "downloadUrl",
+            "video_url",
+            "videoUrl",
+            "image_url",
+            "display_url",
+            "src",
+            "download",
+            "video",
+            "image",
+            "link"
+        ];
 
-                    if (typeof mediaUrl === "function") {
-                        mediaUrl = await mediaUrl();
-                    }
-                }
+        let found = false;
 
-                if (
-                    typeof mediaUrl !== "string" ||
-                    !/^https?:\/\//i.test(mediaUrl)
-                ) {
-                    console.log("[IG] Skipping unsupported item:", media);
-                    continue;
-                }
+        for (const key of urlKeys) {
+            const item = value[key];
 
-                const isImage =
-                    mediaType.includes("image") ||
-                    /\.(jpe?g|png|webp)(?:[?#]|$)/i.test(mediaUrl);
+            if (typeof item === "string" && /^https?:\/\//i.test(item)) {
+                output.push({ url: item, type });
+                found = true;
 
-                console.log(
-                    `[IG] Sending ${isImage ? "image" : "video"}:`,
-                    mediaUrl
-                );
-
-                if (isImage) {
-                    await sock.sendMessage(
-                        chatId,
-                        {
-                            image: { url: mediaUrl },
-                            caption: "✅ DOWNLOADED BY SALMAN"
-                        },
-                        { quoted: message }
-                    );
-                } else {
-                    await sock.sendMessage(
-                        chatId,
-                        {
-                            video: { url: mediaUrl },
-                            caption: "✅ DOWNLOADED BY SALMAN"
-                        },
-                        { quoted: message }
-                    );
-                }
-
-                sent++;
-            } catch (err) {
-                console.error("[IG] Failed to send media:", err);
+                if (output.length >= MAX_MEDIA_ITEMS) return;
             }
         }
 
-        if (sent === 0) {
-            throw new Error(
-                "No supported media could be sent. Inspect the raw response in terminal."
-            );
+        // Traverse common response wrappers.
+        for (const key of [
+            "data",
+            "result",
+            "results",
+            "urls",
+            "media",
+            "items",
+            "images",
+            "videos",
+            "resources"
+        ]) {
+            if (value[key] && typeof value[key] === "object") {
+                walk(value[key], depth + 1);
+            }
         }
 
-        await sock.sendMessage(chatId, {
-            react: { text: "✅", key: message.key }
-        });
+        if (!found && !output.length) {
+            log("WARN", "Response object has no recognized media URL");
+        }
+    }
 
-        console.log(`[IG] Success. Sent ${sent} media item(s).`);
-        console.log("==========================================\n");
+    walk(data);
 
-    } catch (err) {
-        console.error("[IG] COMMAND ERROR:", err);
-        console.error("[IG] Stack:", err?.stack);
+    // Deduplicate URLs.
+    const unique = new Map();
+
+    for (const item of output) {
+        if (!unique.has(item.url)) {
+            unique.set(item.url, item);
+        }
+    }
+
+    return [...unique.values()].slice(0, MAX_MEDIA_ITEMS);
+}
+
+function detectMediaType(item) {
+    const type = String(item.type || "").toLowerCase();
+    const url = item.url.toLowerCase();
+
+    if (
+        type.includes("image") ||
+        /\.(jpe?g|png|webp|gif)(?:[?#]|$)/i.test(url)
+    ) {
+        return "image";
+    }
+
+    if (
+        type.includes("video") ||
+        /\.(mp4|mov|m4v|webm)(?:[?#]|$)/i.test(url)
+    ) {
+        return "video";
+    }
+
+    // Instagram Reels are usually videos, but extensionless
+    // URLs cannot always be classified reliably.
+    return "video";
+}
+
+async function instagramCommand(sock, chatId, message) {
+    const started = Date.now();
+    let currentStage = "initialization";
+    let cleanUrl = "";
+
+    const reportFailure = async (err) => {
+        const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+
+        const report = [
+            "❌ INSTAGRAM COMMAND FAILED",
+            `Stage: ${currentStage}`,
+            `Time: ${new Date().toISOString()}`,
+            `Duration: ${elapsed}s`,
+            `URL: ${cleanUrl || "Not extracted"}`,
+            "",
+            getErrorDetails(err),
+            "",
+            ...(err?.providerErrors || []),
+            "",
+            "Troubleshooting:",
+            "1. Check internet and DNS.",
+            "2. Check whether the scraper API is available.",
+            "3. Update the downloader package.",
+            "4. Private/deleted posts may not be accessible.",
+            "5. Check whether Instagram changed its response."
+        ].join("\n");
+
+        log("ERROR", "Command failed", report);
 
         try {
-            await sock.sendMessage(
-                chatId,
-                {
-                    text:
-                        "❌ Instagram Error\n\n" +
-                        `${err?.message || String(err)}\n\n` +
-                        "Possible causes:\n" +
-                        "• Private, deleted or unsupported post\n" +
-                        "• Instagram changed its response\n" +
-                        "• Scraper/API failure\n\n" +
-                        "Check terminal logs for details."
-                },
-                { quoted: message }
-            );
+            await sock.sendMessage(chatId, {
+                text: "❌ Instagram download failed.\nCheck the diagnostic report below."
+            }, { quoted: message });
         } catch (sendErr) {
-            console.error("[IG] Could not send error message:", sendErr);
+            log("ERROR", "Could not send user error", sendErr.message);
         }
+
+        // Send diagnostics to the same chat where the command was used.
+        await sendWhatsAppLog(sock, chatId, report);
 
         try {
             await sock.sendMessage(chatId, {
                 react: { text: "❌", key: message.key }
             });
-        } catch {}
+        } catch (reactErr) {
+            log("WARN", "Could not add failure reaction", reactErr.message);
+        }
+    };
+
+    try {
+        currentStage = "extracting URL";
+
+        const text = extractText(message);
+        const query = getInstagramUrl(text);
+
+        if (!query) {
+            return await sock.sendMessage(chatId, {
+                text:
+                    "❌ Instagram link do.\n\n" +
+                    "Example:\n" +
+                    ".ig https://www.instagram.com/reel/XXXXXXXX/"
+            }, { quoted: message });
+        }
+
+        currentStage = "validating URL";
+        cleanUrl = validateInstagramUrl(query);
+
+        log("INFO", "Command received", cleanUrl);
+
+        try {
+            await sock.sendMessage(chatId, {
+                react: { text: "📥", key: message.key }
+            });
+        } catch (err) {
+            log("WARN", "Download reaction failed", err.message);
+        }
+
+        currentStage = "checking DNS";
+
+        // DNS diagnostic only. It does not block the downloader:
+        // some libraries use different API hosts.
+        dns.lookup("api.videodropper.app", (err, address) => {
+            if (err) {
+                log("WARN", "videodropper DNS lookup failed", {
+                    code: err.code,
+                    message: err.message
+                });
+            } else {
+                log("INFO", "videodropper DNS lookup succeeded", address);
+            }
+        });
+
+        currentStage = "fetching media";
+        const { result, provider, errors } = await getMediaData(cleanUrl);
+
+        log("INFO", `Provider succeeded: ${provider}`);
+
+        currentStage = "normalizing media";
+        const mediaList = normalizeMedia(result);
+
+        log("INFO", `Media URLs found: ${mediaList.length}`);
+
+        if (!mediaList.length) {
+            const err = new Error(
+                "Scraper returned no recognizable media URLs."
+            );
+            err.providerErrors = errors;
+            throw err;
+        }
+
+        currentStage = "sending media";
+
+        let sent = 0;
+        const sendErrors = [];
+
+        for (let i = 0; i < mediaList.length; i++) {
+            const item = mediaList[i];
+
+            try {
+                const mediaType = detectMediaType(item);
+
+                log("INFO", `Sending ${i + 1}/${mediaList.length}`, {
+                    type: mediaType,
+                    url: item.url
+                });
+
+                const payload = mediaType === "image"
+                    ? {
+                        image: { url: item.url },
+                        caption: "✅ DOWNLOADED BY SALMAN"
+                    }
+                    : {
+                        video: { url: item.url },
+                        caption: "✅ DOWNLOADED BY SALMAN"
+                    };
+
+                await sock.sendMessage(chatId, payload, {
+                    quoted: message
+                });
+
+                sent++;
+            } catch (err) {
+                const detail =
+                    `Media ${i + 1}: ${getErrorDetails(err)}`;
+
+                sendErrors.push(detail);
+                log("ERROR", "Media send failed", detail);
+            }
+        }
+
+        if (sent === 0) {
+            const err = new Error(
+                "All media sends failed. The media URL may be expired, " +
+                "blocked, or unsupported by the WhatsApp connection."
+            );
+            err.providerErrors = [...errors, ...sendErrors];
+            throw err;
+        }
+
+        currentStage = "completed";
+
+        log("INFO", `Success: sent ${sent} item(s)`);
+
+        if (sendErrors.length) {
+            await sendWhatsAppLog(
+                sock,
+                chatId,
+                "⚠️ PARTIAL SUCCESS\n" +
+                `Sent: ${sent}\n` +
+                `Failed: ${sendErrors.length}\n\n` +
+                sendErrors.join("\n\n")
+            );
+        }
+
+        try {
+            await sock.sendMessage(chatId, {
+                react: { text: "✅", key: message.key }
+            });
+        } catch (err) {
+            log("WARN", "Success reaction failed", err.message);
+        }
+
+    } catch (err) {
+        await reportFailure(err);
     }
 }
 
