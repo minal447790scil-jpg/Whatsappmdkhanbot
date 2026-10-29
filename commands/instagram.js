@@ -1,22 +1,52 @@
 
-const { instagramGetUrl } = require("instagram-url-direct");
+const ytdlp = require("youtube-dl-exec");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 async function instagramCommand(sock, chatId, message) {
-    const log = async (text) => {
-        console.log("[INSTAGRAM]", text);
+    const start = Date.now();
+    let stage = "initialization";
+    let url = "";
+    let dir;
+
+    const log = (...args) =>
+        console.log("[INSTAGRAM]", new Date().toISOString(), ...args);
+
+    async function report(error) {
+        const details = [
+            "❌ INSTAGRAM DOWNLOAD FAILED",
+            `Stage: ${stage}`,
+            `URL: ${url || "N/A"}`,
+            `Error: ${error.message || String(error)}`,
+            error.code ? `Code: ${error.code}` : "",
+            error.stderr ? `Details:\n${error.stderr}` : "",
+            `Duration: ${((Date.now() - start) / 1000).toFixed(1)}s`
+        ].filter(Boolean).join("\n\n");
+
+        log(details);
+
         try {
-            await sock.sendMessage(chatId, { text: "🛠️ IG LOG\n" + text });
+            await sock.sendMessage(chatId, {
+                text: details.slice(0, 3500)
+            }, { quoted: message });
         } catch (e) {
-            console.error("[INSTAGRAM] Log send failed:", e.message);
+            log("Could not send error report:", e.message);
         }
-    };
+    }
 
     try {
+        stage = "extracting URL";
+
         const root = message.message || {};
-        const msg = root.ephemeralMessage?.message || root;
+        const content =
+            root.ephemeralMessage?.message ||
+            root.viewOnceMessage?.message ||
+            root;
+
         const text =
-            msg.conversation ||
-            msg.extendedTextMessage?.text ||
+            content.conversation ||
+            content.extendedTextMessage?.text ||
             root.conversation ||
             root.extendedTextMessage?.text ||
             "";
@@ -31,86 +61,100 @@ async function instagramCommand(sock, chatId, message) {
             }, { quoted: message });
         }
 
-        const url = match[0].replace(/[),.!]+$/, "");
+        url = match[0].replace(/[),.!]+$/, "");
+
         const parsed = new URL(url);
 
         if (!["instagram.com", "www.instagram.com", "m.instagram.com"]
             .includes(parsed.hostname.toLowerCase())) {
-            throw new Error("Invalid Instagram URL");
+            throw new Error("Invalid Instagram URL.");
         }
+
+        stage = "creating temporary folder";
+        dir = await fs.promises.mkdtemp(
+            path.join(os.tmpdir(), "instagram-")
+        );
 
         await sock.sendMessage(chatId, {
             react: { text: "📥", key: message.key }
-        });
+        }).catch(() => {});
 
-        console.log("[INSTAGRAM] Fetching:", url);
+        stage = "downloading with yt-dlp";
 
-        const data = await instagramGetUrl(url);
+        const options = {
+            output: path.join(dir, "%(playlist_index)s-%(id)s.%(ext)s"),
+            format: "best[ext=mp4]/best",
+            playlistEnd: 10,
+            noWarnings: true,
+            noProgress: true,
+            retries: 2,
+            socketTimeout: 30
+        };
 
-        console.log("[INSTAGRAM] Response:", JSON.stringify(data, null, 2));
-
-        if (!data || data.post_info?.is_private) {
-            throw new Error("Private post or no response from Instagram.");
+        // Optional: configure a valid Netscape-format cookies file
+        // using the INSTAGRAM_COOKIES environment variable.
+        if (process.env.INSTAGRAM_COOKIES) {
+            options.cookies = process.env.INSTAGRAM_COOKIES;
         }
 
-        const items = Array.isArray(data.media_details)
-            ? data.media_details
-            : (data.url_list || []).map(url => ({ url, type: "" }));
+        log("Downloading:", url);
 
-        if (!items.length) {
-            throw new Error("No media URLs returned. Check terminal response.");
+        await ytdlp(url, options);
+
+        stage = "reading downloaded files";
+
+        const files = (await fs.promises.readdir(dir))
+            .filter(name => /\.(mp4|m4v|mov|webm|jpg|jpeg|png|webp)$/i.test(name))
+            .sort();
+
+        if (!files.length) {
+            throw new Error("yt-dlp completed but no media files were found.");
         }
+
+        stage = "sending media";
 
         let sent = 0;
 
-        for (const item of items.slice(0, 10)) {
-            const mediaUrl = typeof item === "string" ? item : item.url;
+        for (const name of files.slice(0, 10)) {
+            const file = path.join(dir, name);
+            const buffer = await fs.promises.readFile(file);
 
-            if (!mediaUrl || !/^https?:\/\//i.test(mediaUrl)) {
-                console.log("[INSTAGRAM] Invalid media item:", item);
-                continue;
-            }
+            const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name);
 
-            const type = String(item.type || "").toLowerCase();
-            const image = type.includes("image") ||
-                /\.(jpe?g|png|webp|gif)(?:[?#]|$)/i.test(mediaUrl);
-
-            await sock.sendMessage(chatId, image
+            await sock.sendMessage(chatId, isImage
                 ? {
-                    image: { url: mediaUrl },
+                    image: buffer,
                     caption: "✅ DOWNLOADED BY SALMAN"
                 }
                 : {
-                    video: { url: mediaUrl },
+                    video: buffer,
                     caption: "✅ DOWNLOADED BY SALMAN"
                 }, { quoted: message });
 
             sent++;
+            log("Sent:", name, buffer.length, "bytes");
         }
 
-        if (!sent) throw new Error("No media could be sent to WhatsApp.");
+        log(`SUCCESS: ${sent} item(s)`);
 
         await sock.sendMessage(chatId, {
             react: { text: "✅", key: message.key }
-        });
+        }).catch(() => {});
 
-        console.log(`[INSTAGRAM] Success: ${sent} media item(s)`);
+    } catch (error) {
+        await report(error);
 
-    } catch (err) {
-        const report =
-            `❌ Instagram failed\n` +
-            `Error: ${err.message}\n` +
-            `Stack:\n${err.stack || "N/A"}`;
+        await sock.sendMessage(chatId, {
+            react: { text: "❌", key: message.key }
+        }).catch(() => {});
 
-        console.error("[INSTAGRAM]", report);
-
-        await log(report);
-
-        try {
-            await sock.sendMessage(chatId, {
-                react: { text: "❌", key: message.key }
-            });
-        } catch {}
+    } finally {
+        if (dir) {
+            await fs.promises.rm(dir, {
+                recursive: true,
+                force: true
+            }).catch(err => log("Cleanup failed:", err.message));
+        }
     }
 }
 
