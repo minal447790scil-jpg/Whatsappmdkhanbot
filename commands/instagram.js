@@ -1,4 +1,3 @@
-
 const ytdlp = require("youtube-dl-exec");
 const fs = require("fs");
 const os = require("os");
@@ -6,52 +5,38 @@ const path = require("path");
 const { promisify } = require("util");
 const { execFile } = require("child_process");
 
-const execFileAsync = promisify(execFile);
+const exec = promisify(execFile);
 
 const CAPTION = "✅ DOWNLOADED BY SALMAN";
 const MAX_MEDIA = 10;
+const MAX_VIDEO_SIZE = 60 * 1024 * 1024;
+
+function log(...args) {
+    console.log("[INSTAGRAM]", new Date().toISOString(), ...args);
+}
+
+async function run(command, args, options = {}) {
+    return exec(command, args, {
+        timeout: 300000,
+        maxBuffer: 20 * 1024 * 1024,
+        ...options
+    });
+}
 
 async function instagramCommand(sock, chatId, message) {
-    const start = Date.now();
+    let dir;
     let stage = "initialization";
     let url = "";
-    let dir;
-
-    const log = (...args) =>
-        console.log("[INSTAGRAM]", new Date().toISOString(), ...args);
-
-    async function report(error) {
-        const details = [
-            "❌ INSTAGRAM DOWNLOAD FAILED",
-            `Stage: ${stage}`,
-            `Error: ${error.message || String(error)}`,
-            error.code ? `Code: ${error.code}` : "",
-            error.stderr
-                ? `Details:\n${String(error.stderr).slice(-1800)}`
-                : "",
-            `Duration: ${((Date.now() - start) / 1000).toFixed(1)}s`
-        ].filter(Boolean).join("\n\n");
-
-        log(details);
-
-        try {
-            await sock.sendMessage(chatId, {
-                text: details.slice(0, 3500)
-            }, { quoted: message });
-        } catch (e) {
-            log("Error report failed:", e.message);
-        }
-    }
 
     try {
-        // 1. Extract Instagram URL
-        stage = "extracting URL";
+        // Extract URL from the incoming WhatsApp message.
+        stage = "extracting Instagram URL";
 
         const root = message.message || {};
         const content =
             root.ephemeralMessage?.message ||
-            root.viewOnceMessage?.message ||
             root.viewOnceMessageV2?.message ||
+            root.viewOnceMessage?.message ||
             root;
 
         const text =
@@ -66,29 +51,23 @@ async function instagramCommand(sock, chatId, message) {
         );
 
         if (!match) {
-            return sock.sendMessage(chatId, {
-                text: "❌ Please provide an Instagram Reel/Post link."
+            return await sock.sendMessage(chatId, {
+                text: "❌ Send an Instagram Reel/Post link.\n\nExample:\n.ig https://www.instagram.com/reel/ID/"
             }, { quoted: message });
         }
 
         url = match[0].replace(/[),.!]+$/, "");
-
         const parsed = new URL(url);
 
-        if (
-            !["instagram.com", "www.instagram.com", "m.instagram.com"]
-                .includes(parsed.hostname.toLowerCase())
-        ) {
-            throw new Error("Invalid Instagram URL.");
+        if (!["instagram.com", "www.instagram.com", "m.instagram.com"]
+            .includes(parsed.hostname.toLowerCase())) {
+            throw new Error("Invalid Instagram URL");
         }
 
-        // 2. Check FFmpeg
-        stage = "checking FFmpeg";
-
-        await execFileAsync("ffmpeg", ["-version"]);
-
-        // 3. Create temporary directory
-        stage = "creating temporary folder";
+        // Verify FFmpeg tools are installed in the Railway container.
+        stage = "checking FFmpeg and FFprobe";
+        await run("ffmpeg", ["-version"]);
+        await run("ffprobe", ["-version"]);
 
         dir = await fs.promises.mkdtemp(
             path.join(os.tmpdir(), "instagram-")
@@ -98,44 +77,33 @@ async function instagramCommand(sock, chatId, message) {
             react: { text: "📥", key: message.key }
         }).catch(() => {});
 
-        // 4. Download Instagram media
-        stage = "downloading with yt-dlp";
+        // Download media. yt-dlp merges separate audio/video streams when needed.
+        stage = "downloading Instagram media";
 
         const options = {
-            output: path.join(
-                dir,
-                "%(autonumber)03d-%(id)s.%(ext)s"
-            ),
-
-            // Prefer separate video/audio streams, otherwise best single file
+            output: path.join(dir, "%(autonumber)03d-%(id)s.%(ext)s"),
             format: "bestvideo+bestaudio/best",
-
             mergeOutputFormat: "mp4",
-
             playlistEnd: MAX_MEDIA,
+            retries: 10,
+            fragmentRetries: 10,
+            extractorRetries: 5,
+            socketTimeout: 120,
+            concurrentFragments: 4,
             noWarnings: true,
             noProgress: true,
-            noCheckCertificates: false,
-            retries: 5,
-            fragmentRetries: 5,
-            extractorRetries: 3,
-            socketTimeout: 60,
-            sleepInterval: 1,
-            maxSleepInterval: 3,
             ignoreErrors: false
         };
 
-        // Optional Instagram cookies in Netscape format
         if (process.env.INSTAGRAM_COOKIES) {
             options.cookies = process.env.INSTAGRAM_COOKIES;
         }
 
-        log("Downloading:", url);
-
+        log("Starting download:", url);
         await ytdlp(url, options);
 
-        // 5. Read downloaded files
-        stage = "finding downloaded media";
+        // Find downloaded images/videos.
+        stage = "finding downloaded files";
 
         const files = (await fs.promises.readdir(dir))
             .filter(name =>
@@ -145,22 +113,26 @@ async function instagramCommand(sock, chatId, message) {
 
         if (!files.length) {
             throw new Error(
-                "No media found. The Reel may be private, restricted or unavailable."
+                "No media downloaded. Instagram may require login or the content may be unavailable."
             );
         }
 
         let sent = 0;
 
-        // 6. Process each downloaded file
         for (const name of files.slice(0, MAX_MEDIA)) {
             const input = path.join(dir, name);
             const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name);
 
             if (isImage) {
                 stage = "sending image";
+                const imageBuffer = await fs.promises.readFile(input);
+
+                if (!imageBuffer.length) {
+                    throw new Error("Empty image: " + name);
+                }
 
                 await sock.sendMessage(chatId, {
-                    image: { url: input },
+                    image: imageBuffer,
                     caption: CAPTION
                 }, { quoted: message });
 
@@ -168,15 +140,12 @@ async function instagramCommand(sock, chatId, message) {
                 continue;
             }
 
-            // 7. Convert every video to WhatsApp-friendly MP4
-            stage = "converting video to H264 MP4";
+            // Normalize each video to broadly compatible MP4/H.264/AAC.
+            stage = "converting video to WhatsApp MP4";
 
-            const output = path.join(
-                dir,
-                `fixed-${sent + 1}.mp4`
-            );
+            const output = path.join(dir, `converted-${sent + 1}.mp4`);
 
-            await execFileAsync("ffmpeg", [
+            await run("ffmpeg", [
                 "-y",
                 "-i", input,
                 "-map", "0:v:0",
@@ -188,61 +157,61 @@ async function instagramCommand(sock, chatId, message) {
                 "-c:a", "aac",
                 "-b:a", "128k",
                 "-ac", "2",
-                "-movflags", "+faststart",
                 "-max_muxing_queue_size", "2048",
+                "-movflags", "+faststart",
                 output
-            ], {
-                timeout: 300000,
-                maxBuffer: 10 * 1024 * 1024
-            });
+            ]);
 
-            // 8. Validate converted file
-            stage = "validating MP4";
+            // Validate the converted file before sending.
+            stage = "validating converted video";
 
             const stat = await fs.promises.stat(output);
-
             if (!stat.size) {
-                throw new Error("Converted video is empty.");
+                throw new Error("Converted video is empty");
             }
 
-            const probe = await execFileAsync("ffprobe", [
+            const { stdout } = await run("ffprobe", [
                 "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height",
+                "-show_entries",
+                "stream=codec_type,codec_name,width,height,pix_fmt",
+                "-show_entries",
+                "format=duration",
                 "-of", "json",
                 output
             ]);
 
-            const info = JSON.parse(probe.stdout);
-            const videoStream = info.streams?.[0];
-
-            if (!videoStream || videoStream.codec_name !== "h264") {
-                throw new Error("Invalid video stream after conversion.");
-            }
-
-            log(
-                "Validated:",
-                output,
-                stat.size,
-                "bytes",
-                videoStream
+            const probe = JSON.parse(stdout);
+            const videoStream = probe.streams?.find(
+                stream => stream.codec_type === "video"
             );
 
-            // 9. Send video using local URL (less RAM usage)
+            if (
+                !videoStream ||
+                videoStream.codec_name !== "h264" ||
+                videoStream.pix_fmt !== "yuv420p"
+            ) {
+                throw new Error("Video validation failed");
+            }
+
+            log("Video validated:", {
+                name,
+                size: stat.size,
+                duration: probe.format?.duration,
+                codec: videoStream.codec_name
+            });
+
+            // Use Buffer for ordinary-sized videos; document URL for larger files.
             stage = "sending video";
 
-            try {
+            if (stat.size <= MAX_VIDEO_SIZE) {
+                const buffer = await fs.promises.readFile(output);
+
                 await sock.sendMessage(chatId, {
-                    video: { url: output },
+                    video: buffer,
                     mimetype: "video/mp4",
-                    caption: CAPTION,
-                    ptv: false
+                    caption: CAPTION
                 }, { quoted: message });
-
-            } catch (sendError) {
-                log("Video send failed, trying document:", sendError.message);
-
-                // Fallback: send the MP4 as a document
+            } else {
                 await sock.sendMessage(chatId, {
                     document: { url: output },
                     mimetype: "video/mp4",
@@ -252,21 +221,37 @@ async function instagramCommand(sock, chatId, message) {
             }
 
             sent++;
-            log("Successfully sent:", output);
+            log("Successfully sent:", name);
         }
 
-        if (!sent) {
-            throw new Error("No media was successfully sent.");
+        if (sent === 0) {
+            throw new Error("No media was sent");
         }
 
-        log(`SUCCESS: ${sent} media item(s)`);
+        log("SUCCESS:", sent, "media files sent");
 
         await sock.sendMessage(chatId, {
             react: { text: "✅", key: message.key }
         }).catch(() => {});
 
     } catch (error) {
-        await report(error);
+        log("FAILED STAGE:", stage);
+        log("ERROR:", error.message);
+        log("STDERR:", error.stderr || "N/A");
+
+        const errorMessage = [
+            "❌ INSTAGRAM DOWNLOAD FAILED",
+            "",
+            "Stage: " + stage,
+            "Error: " + (error.message || String(error)),
+            error.stderr
+                ? "Details:\n" + String(error.stderr).slice(-1500)
+                : ""
+        ].filter(Boolean).join("\n");
+
+        await sock.sendMessage(chatId, {
+            text: errorMessage.slice(0, 3500)
+        }, { quoted: message }).catch(() => {});
 
         await sock.sendMessage(chatId, {
             react: { text: "❌", key: message.key }
@@ -277,7 +262,9 @@ async function instagramCommand(sock, chatId, message) {
             await fs.promises.rm(dir, {
                 recursive: true,
                 force: true
-            }).catch(err => log("Cleanup failed:", err.message));
+            }).catch(error => {
+                log("Cleanup failed:", error.message);
+            });
         }
     }
 }
