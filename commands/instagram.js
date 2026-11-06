@@ -208,10 +208,10 @@ async function instagramCommand(sock, chatId, message) {
             const sendMime = "video/mp4";
             log("WhatsApp-compatible MP4 ready:", name, stat.size, "bytes");
             stage = "sending video";
-            const stat = await fs.promises.stat(sendFile);
-            if (!stat.size) throw new Error("Video file is empty");
+            const sendStat = await fs.promises.stat(sendFile);
+            if (!sendStat.size) throw new Error("Video file is empty");
 
-            if (stat.size <= MAX_VIDEO_SIZE) {
+            if (sendStat.size <= MAX_VIDEO_SIZE) {
                 const buffer = await fs.promises.readFile(sendFile);
                 await sock.sendMessage(chatId, {
                     video: buffer,
