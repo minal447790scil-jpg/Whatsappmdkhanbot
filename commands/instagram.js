@@ -17,10 +17,22 @@ function log(...args) {
 
 async function run(command, args, options = {}) {
     return exec(command, args, {
-        timeout: 300000,
-        maxBuffer: 20 * 1024 * 1024,
+        timeout: 600000,
+        maxBuffer: 50 * 1024 * 1024,
         ...options
     });
+}
+
+async function getProbe(file) {
+    const { stdout } = await run("ffprobe", [
+        "-v", "error",
+        "-show_entries",
+        "stream=codec_type,codec_name,width,height,pix_fmt",
+        "-show_entries", "format=duration",
+        "-of", "json",
+        file
+    ]);
+    return JSON.parse(stdout);
 }
 
 async function instagramCommand(sock, chatId, message) {
@@ -29,7 +41,6 @@ async function instagramCommand(sock, chatId, message) {
     let url = "";
 
     try {
-        // Extract URL from the incoming WhatsApp message.
         stage = "extracting Instagram URL";
 
         const root = message.message || {};
@@ -52,7 +63,7 @@ async function instagramCommand(sock, chatId, message) {
 
         if (!match) {
             return await sock.sendMessage(chatId, {
-                text: "❌ Send an Instagram Reel/Post link.\n\nExample:\n.ig https://www.instagram.com/reel/ID/"
+                text: "❌ Send an Instagram Reel/Post link."
             }, { quoted: message });
         }
 
@@ -64,7 +75,6 @@ async function instagramCommand(sock, chatId, message) {
             throw new Error("Invalid Instagram URL");
         }
 
-        // Verify FFmpeg tools are installed in the Railway container.
         stage = "checking FFmpeg and FFprobe";
         await run("ffmpeg", ["-version"]);
         await run("ffprobe", ["-version"]);
@@ -77,7 +87,6 @@ async function instagramCommand(sock, chatId, message) {
             react: { text: "📥", key: message.key }
         }).catch(() => {});
 
-        // Download media. yt-dlp merges separate audio/video streams when needed.
         stage = "downloading Instagram media";
 
         const options = {
@@ -99,10 +108,9 @@ async function instagramCommand(sock, chatId, message) {
             options.cookies = process.env.INSTAGRAM_COOKIES;
         }
 
-        log("Starting download:", url);
+        log("Downloading:", url);
         await ytdlp(url, options);
 
-        // Find downloaded images/videos.
         stage = "finding downloaded files";
 
         const files = (await fs.promises.readdir(dir))
@@ -126,10 +134,7 @@ async function instagramCommand(sock, chatId, message) {
             if (isImage) {
                 stage = "sending image";
                 const imageBuffer = await fs.promises.readFile(input);
-
-                if (!imageBuffer.length) {
-                    throw new Error("Empty image: " + name);
-                }
+                if (!imageBuffer.length) throw new Error("Empty image: " + name);
 
                 await sock.sendMessage(chatId, {
                     image: imageBuffer,
@@ -140,72 +145,100 @@ async function instagramCommand(sock, chatId, message) {
                 continue;
             }
 
-            // Normalize each video to broadly compatible MP4/H.264/AAC.
-            stage = "converting video to WhatsApp MP4";
+            // Inspect input first: some Instagram files contain video only,
+            // with no audio stream. Do not pass audio encoder options in that case.
+            stage = "inspecting downloaded video";
+            const inputProbe = await getProbe(input);
+            const inputVideo = inputProbe.streams?.find(
+                stream => stream.codec_type === "video"
+            );
+            const hasAudio = inputProbe.streams?.some(
+                stream => stream.codec_type === "audio"
+            );
+
+            if (!inputVideo) {
+                throw new Error("Downloaded file has no video stream: " + name);
+            }
 
             const output = path.join(dir, `converted-${sent + 1}.mp4`);
 
-            await run("ffmpeg", [
+            stage = hasAudio
+                ? "converting video and audio to MP4"
+                : "converting silent video to MP4";
+
+            const ffmpegArgs = [
                 "-y",
+                "-hide_banner",
                 "-i", input,
-                "-map", "0:v:0",
-                "-map", "0:a:0?",
+                "-map", "0:v:0"
+            ];
+
+            if (hasAudio) {
+                ffmpegArgs.push(
+                    "-map", "0:a:0",
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-ac", "2"
+                );
+            } else {
+                ffmpegArgs.push("-an");
+            }
+
+            ffmpegArgs.push(
                 "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", "23",
+                "-preset", "ultrafast",
+                "-crf", "24",
                 "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-ac", "2",
-                "-max_muxing_queue_size", "2048",
+                "-threads", "2",
                 "-movflags", "+faststart",
                 output
-            ]);
+            );
 
-            // Validate the converted file before sending.
+            try {
+                await run("ffmpeg", ffmpegArgs);
+            } catch (ffmpegError) {
+                log("FFMPEG EXIT CODE:", ffmpegError.code);
+                log("FFMPEG SIGNAL:", ffmpegError.signal);
+                log("FFMPEG STDERR TAIL:",
+                    String(ffmpegError.stderr || "").slice(-8000));
+                throw new Error(
+                    "FFmpeg conversion failed. Exit=" +
+                    (ffmpegError.code ?? "unknown") +
+                    ", signal=" + (ffmpegError.signal || "none") +
+                    ". Check Railway logs for FFMPEG STDERR TAIL."
+                );
+            }
+
             stage = "validating converted video";
 
             const stat = await fs.promises.stat(output);
-            if (!stat.size) {
-                throw new Error("Converted video is empty");
-            }
+            if (!stat.size) throw new Error("Converted video is empty");
 
-            const { stdout } = await run("ffprobe", [
-                "-v", "error",
-                "-show_entries",
-                "stream=codec_type,codec_name,width,height,pix_fmt",
-                "-show_entries",
-                "format=duration",
-                "-of", "json",
-                output
-            ]);
-
-            const probe = JSON.parse(stdout);
-            const videoStream = probe.streams?.find(
+            const outputProbe = await getProbe(output);
+            const outputVideo = outputProbe.streams?.find(
                 stream => stream.codec_type === "video"
             );
 
             if (
-                !videoStream ||
-                videoStream.codec_name !== "h264" ||
-                videoStream.pix_fmt !== "yuv420p"
+                !outputVideo ||
+                outputVideo.codec_name !== "h264" ||
+                outputVideo.pix_fmt !== "yuv420p"
             ) {
-                throw new Error("Video validation failed");
+                throw new Error("Converted output is not valid H.264/yuv420p MP4");
             }
 
-            log("Video validated:", {
-                name,
-                size: stat.size,
-                duration: probe.format?.duration,
-                codec: videoStream.codec_name
+            log("Validated:", {
+                file: name,
+                bytes: stat.size,
+                duration: outputProbe.format?.duration,
+                videoCodec: outputVideo.codec_name,
+                hasAudio
             });
 
-            // Use Buffer for ordinary-sized videos; document URL for larger files.
             stage = "sending video";
 
             if (stat.size <= MAX_VIDEO_SIZE) {
                 const buffer = await fs.promises.readFile(output);
-
                 await sock.sendMessage(chatId, {
                     video: buffer,
                     mimetype: "video/mp4",
@@ -221,36 +254,32 @@ async function instagramCommand(sock, chatId, message) {
             }
 
             sent++;
-            log("Successfully sent:", name);
+            log("Sent:", name);
         }
 
-        if (sent === 0) {
-            throw new Error("No media was sent");
-        }
-
-        log("SUCCESS:", sent, "media files sent");
+        if (!sent) throw new Error("No media was successfully sent");
 
         await sock.sendMessage(chatId, {
             react: { text: "✅", key: message.key }
         }).catch(() => {});
 
+        log("SUCCESS:", sent, "media item(s)");
+
     } catch (error) {
         log("FAILED STAGE:", stage);
         log("ERROR:", error.message);
-        log("STDERR:", error.stderr || "N/A");
+        if (error.stderr) {
+            log("ERROR STDERR TAIL:", String(error.stderr).slice(-8000));
+        }
 
-        const errorMessage = [
+        const report = [
             "❌ INSTAGRAM DOWNLOAD FAILED",
-            "",
             "Stage: " + stage,
-            "Error: " + (error.message || String(error)),
-            error.stderr
-                ? "Details:\n" + String(error.stderr).slice(-1500)
-                : ""
-        ].filter(Boolean).join("\n");
+            "Error: " + (error.message || String(error))
+        ].join("\n");
 
         await sock.sendMessage(chatId, {
-            text: errorMessage.slice(0, 3500)
+            text: report.slice(0, 3000)
         }, { quoted: message }).catch(() => {});
 
         await sock.sendMessage(chatId, {
@@ -262,9 +291,7 @@ async function instagramCommand(sock, chatId, message) {
             await fs.promises.rm(dir, {
                 recursive: true,
                 force: true
-            }).catch(error => {
-                log("Cleanup failed:", error.message);
-            });
+            }).catch(error => log("Cleanup failed:", error.message));
         }
     }
 }
