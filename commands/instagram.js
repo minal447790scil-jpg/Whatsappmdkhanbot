@@ -137,64 +137,76 @@ async function instagramCommand(sock, chatId, message) {
                 continue;
             }
 
-            // Normalize each video to broadly compatible MP4/H.264/AAC.
-            stage = "converting video to WhatsApp MP4";
+            // Convert every video to a WhatsApp-compatible MP4.
+            // Do not fall back to the unconverted source: that can produce a
+            // message that uploads successfully but cannot play in WhatsApp.
+            stage = "converting video to WhatsApp-compatible MP4";
 
             const output = path.join(dir, `converted-${sent + 1}.mp4`);
 
-            let sendFile = input;
-            let sendMime = "video/mp4";
+            await run("ffmpeg", [
+                "-y",
+                "-fflags", "+genpts",
+                "-i", input,
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-profile:v", "baseline",
+                "-level", "3.1",
+                "-pix_fmt", "yuv420p",
+                "-r", "30",
+                "-vsync", "cfr",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-ar", "44100",
+                "-ac", "2",
+                "-max_muxing_queue_size", "2048",
+                "-avoid_negative_ts", "make_zero",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                output
+            ]);
 
-            try {
-                await run("ffmpeg", [
-                    "-y",
-                    "-i", input,
-                    "-map", "0:v:0",
-                    "-map", "0:a:0?",
-                    "-c:v", "libx264",
-                    "-preset", "veryfast",
-                    "-crf", "23",
-                    "-pix_fmt", "yuv420p",
-                    "-c:a", "aac",
-                    "-b:a", "128k",
-                    "-ac", "2",
-                    "-max_muxing_queue_size", "2048",
-                    "-movflags", "+faststart",
-                    output
-                ]);
-
-                const stat = await fs.promises.stat(output);
-                if (!stat.size) throw new Error("Converted video is empty");
-
-                const { stdout } = await run("ffprobe", [
-                    "-v", "error",
-                    "-show_entries", "stream=codec_type,codec_name,width,height,pix_fmt",
-                    "-show_entries", "format=duration",
-                    "-of", "json",
-                    output
-                ]);
-                const probe = JSON.parse(stdout);
-                const videoStream = probe.streams?.find(
-                    stream => stream.codec_type === "video"
-                );
-                if (!videoStream || videoStream.codec_name !== "h264" ||
-                    videoStream.pix_fmt !== "yuv420p") {
-                    throw new Error("Converted video validation failed");
-                }
-
-                sendFile = output;
-                sendMime = "video/mp4";
-                log("Video converted successfully:", name, stat.size);
-            } catch (conversionError) {
-                // Keep the download working even if FFmpeg cannot convert this particular file.
-                log("FFmpeg conversion failed; sending original download:",
-                    conversionError.message,
-                    conversionError.stderr ? String(conversionError.stderr).slice(-1200) : "");
-                sendFile = input;
-                sendMime = /\.webm$/i.test(input) ? "video/webm" :
-                    /\.mkv$/i.test(input) ? "video/x-matroska" : "video/mp4";
+            const stat = await fs.promises.stat(output);
+            if (!stat.size) {
+                throw new Error("FFmpeg produced an empty MP4");
             }
 
+            const { stdout } = await run("ffprobe", [
+                "-v", "error",
+                "-show_entries", "stream=codec_type,codec_name,width,height,pix_fmt",
+                "-show_entries", "format=format_name,duration",
+                "-of", "json",
+                output
+            ]);
+
+            const probe = JSON.parse(stdout);
+            const videoStream = probe.streams?.find(
+                stream => stream.codec_type === "video"
+            );
+            const audioStream = probe.streams?.find(
+                stream => stream.codec_type === "audio"
+            );
+            const duration = Number(probe.format?.duration || 0);
+
+            if (!videoStream ||
+                videoStream.codec_name !== "h264" ||
+                videoStream.pix_fmt !== "yuv420p" ||
+                !String(probe.format?.format_name || "").includes("mp4") ||
+                !Number.isFinite(duration) ||
+                duration <= 0) {
+                throw new Error("Converted MP4 failed playback validation");
+            }
+
+            if (audioStream && audioStream.codec_name !== "aac") {
+                throw new Error("Converted MP4 audio is not AAC");
+            }
+
+            const sendFile = output;
+            const sendMime = "video/mp4";
+            log("WhatsApp-compatible MP4 ready:", name, stat.size, "bytes");
             stage = "sending video";
             const stat = await fs.promises.stat(sendFile);
             if (!stat.size) throw new Error("Video file is empty");
