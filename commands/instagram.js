@@ -18,7 +18,7 @@ function log(...args) {
 async function run(command, args, options = {}) {
     return exec(command, args, {
         timeout: 600000,
-        maxBuffer: 50 * 1024 * 1024,
+        maxBuffer: 30 * 1024 * 1024,
         ...options
     });
 }
@@ -35,13 +35,33 @@ async function probe(file) {
     return JSON.parse(stdout);
 }
 
+async function sendVideo(sock, chatId, message, file, caption) {
+    const stat = await fs.promises.stat(file);
+    if (!stat.size) throw new Error("Video file is empty");
+
+    if (stat.size <= MAX_VIDEO_SIZE) {
+        const buffer = await fs.promises.readFile(file);
+        await sock.sendMessage(chatId, {
+            video: buffer,
+            mimetype: "video/mp4",
+            caption
+        }, { quoted: message });
+    } else {
+        await sock.sendMessage(chatId, {
+            document: { url: file },
+            mimetype: "video/mp4",
+            fileName: "Instagram-Video.mp4",
+            caption
+        }, { quoted: message });
+    }
+}
+
 async function instagramCommand(sock, chatId, message) {
     let dir;
     let stage = "initialization";
     let url = "";
 
     try {
-        // Extract URL from WhatsApp message, including common wrappers.
         stage = "extracting Instagram URL";
 
         const root = message.message || {};
@@ -76,7 +96,7 @@ async function instagramCommand(sock, chatId, message) {
             throw new Error("Invalid Instagram URL");
         }
 
-        stage = "checking FFmpeg and FFprobe";
+        stage = "checking FFmpeg";
         await run("ffmpeg", ["-version"]);
         await run("ffprobe", ["-version"]);
 
@@ -88,34 +108,35 @@ async function instagramCommand(sock, chatId, message) {
             react: { text: "📥", key: message.key }
         }).catch(() => {});
 
-        // Ask yt-dlp for best separate video + audio when available.
-        // /best is the fallback for extractors that only expose one combined file.
-        stage = "downloading Instagram media";
+        // IMPORTANT: Prefer a format that contains BOTH video and audio.
+        // If no combined format exists, request best video + best audio.
+        // There is deliberately no silent-video fallback.
+        stage = "downloading audio-and-video format";
 
         const options = {
             output: path.join(dir, "%(autonumber)03d-%(id)s.%(ext)s"),
-            format: "bestvideo+bestaudio/best",
+            format: "best[acodec!=none][vcodec!=none]/bestvideo*+bestaudio",
+            formatSort: ["hasaud", "res", "vcodec:h264", "acodec:m4a"],
             mergeOutputFormat: "mkv",
             playlistEnd: MAX_MEDIA,
-            retries: 10,
-            fragmentRetries: 10,
-            extractorRetries: 5,
-            socketTimeout: 120,
-            concurrentFragments: 4,
+            retries: 8,
+            fragmentRetries: 8,
+            extractorRetries: 4,
+            socketTimeout: 90,
+            concurrentFragments: 2,
             noWarnings: true,
             noProgress: true,
-            ignoreErrors: false,
-            keepVideo: false
+            ignoreErrors: false
         };
 
         if (process.env.INSTAGRAM_COOKIES) {
             options.cookies = process.env.INSTAGRAM_COOKIES;
         }
 
-        log("Downloading:", url);
+        log("Downloading with required audio:", url);
         await ytdlp(url, options);
 
-        stage = "finding downloaded media";
+        stage = "finding downloaded files";
 
         const files = (await fs.promises.readdir(dir))
             .filter(name =>
@@ -126,7 +147,7 @@ async function instagramCommand(sock, chatId, message) {
 
         if (!files.length) {
             throw new Error(
-                "No media downloaded. Instagram may require login or the content may be unavailable."
+                "No audio/video media downloaded. Instagram may require login or provide no compatible audio format."
             );
         }
 
@@ -150,8 +171,7 @@ async function instagramCommand(sock, chatId, message) {
                 continue;
             }
 
-            // Inspect source tracks before encoding. Never silently invent audio.
-            stage = "inspecting source audio/video";
+            stage = "checking source audio";
             const sourceInfo = await probe(input);
             const sourceVideo = sourceInfo.streams?.find(
                 s => s.codec_type === "video"
@@ -160,120 +180,96 @@ async function instagramCommand(sock, chatId, message) {
                 s => s.codec_type === "audio"
             );
 
-            if (!sourceVideo) {
-                throw new Error("Downloaded media has no video stream: " + name);
-            }
-
             log("Source streams:", {
                 file: name,
-                videoCodec: sourceVideo.codec_name,
-                audioCodec: sourceAudio?.codec_name || "NO AUDIO STREAM",
+                video: sourceVideo?.codec_name || "missing",
+                audio: sourceAudio?.codec_name || "missing",
                 duration: sourceInfo.format?.duration
             });
 
-            const output = path.join(dir, `converted-${sent + 1}.mp4`);
+            if (!sourceVideo) {
+                throw new Error("Downloaded file has no video stream: " + name);
+            }
 
-            stage = "converting video while preserving available audio";
+            // Do not send a silent clip when the user expects sound.
+            if (!sourceAudio) {
+                throw new Error(
+                    "Instagram/yt-dlp returned a video-only file (no audio stream). Refusing to send a silent video. Check format availability/cookies and update yt-dlp."
+                );
+            }
 
-            const args = [
+            const converted = path.join(dir, `converted-${sent + 1}.mp4`);
+            stage = "converting video with audio";
+
+            const ffmpegArgs = [
                 "-y",
                 "-hide_banner",
                 "-i", input,
                 "-map", "0:v:0",
-                "-map", "0:a:0?"
+                "-map", "0:a:0",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "27",
+                "-vf", "scale='min(720,iw)':-2",
+                "-pix_fmt", "yuv420p",
+                "-threads", "2",
+                "-c:a", "aac",
+                "-b:a", "96k",
+                "-ac", "2",
+                "-movflags", "+faststart",
+                converted
             ];
 
-            // Re-encode video to H.264 at a smaller size.
-            // Audio is copied when already AAC; otherwise encoded to AAC.
-            args.push(
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "28",
-                "-maxrate", "1800k",
-                "-bufsize", "3600k",
-                "-pix_fmt", "yuv420p",
-                "-vf", "scale='min(720,iw)':-2"
-            );
-
-            if (sourceAudio) {
-                if (sourceAudio.codec_name === "aac") {
-                    args.push("-c:a", "copy");
-                } else {
-                    args.push(
-                        "-c:a", "aac",
-                        "-b:a", "96k",
-                        "-ac", "2"
-                    );
-                }
-            } else {
-                args.push("-an");
-            }
-
-            args.push(
-                "-movflags", "+faststart",
-                output
-            );
+            let sendFile = input;
+            let conversionSucceeded = false;
 
             try {
-                await run("ffmpeg", args);
-            } catch (e) {
-                log("FFMPEG EXIT:", e.code, "SIGNAL:", e.signal);
-                log("FFMPEG STDERR:", String(e.stderr || "").slice(-10000));
-                throw new Error(
-                    "FFmpeg conversion failed. Check Railway logs for FFMPEG STDERR."
+                await run("ffmpeg", ffmpegArgs);
+
+                const convertedStat = await fs.promises.stat(converted);
+                const convertedInfo = await probe(converted);
+                const convertedVideo = convertedInfo.streams?.find(
+                    s => s.codec_type === "video"
                 );
-            }
-
-            stage = "validating converted media";
-
-            const outputStat = await fs.promises.stat(output);
-            if (!outputStat.size) throw new Error("Converted MP4 is empty");
-
-            const outputInfo = await probe(output);
-            const outputVideo = outputInfo.streams?.find(
-                s => s.codec_type === "video"
-            );
-            const outputAudio = outputInfo.streams?.find(
-                s => s.codec_type === "audio"
-            );
-
-            if (!outputVideo || outputVideo.codec_name !== "h264") {
-                throw new Error("Output H.264 video validation failed");
-            }
-
-            if (sourceAudio && !outputAudio) {
-                throw new Error(
-                    "Source had audio but converted MP4 has no audio. Refusing to send silent output."
+                const convertedAudio = convertedInfo.streams?.find(
+                    s => s.codec_type === "audio"
                 );
+
+                if (!convertedStat.size || !convertedVideo ||
+                    convertedVideo.codec_name !== "h264" || !convertedAudio) {
+                    throw new Error("Converted file failed video/audio validation");
+                }
+
+                sendFile = converted;
+                conversionSucceeded = true;
+
+                log("Compressed output:", {
+                    originalBytes: (await fs.promises.stat(input)).size,
+                    convertedBytes: convertedStat.size,
+                    audioCodec: convertedAudio.codec_name
+                });
+
+            } catch (conversionError) {
+                log("FFMPEG CONVERSION FAILED; FALLING BACK TO ORIGINAL WITH AUDIO");
+                log("FFMPEG EXIT:", conversionError.code);
+                log("FFMPEG SIGNAL:", conversionError.signal);
+                log("FFMPEG STDERR:", String(
+                    conversionError.stderr || conversionError.message
+                ).slice(-8000));
+
+                // Original source has already been verified to contain audio.
+                // Send it instead of losing the download.
+                sendFile = input;
             }
 
-            log("Output validated:", {
-                bytes: outputStat.size,
-                duration: outputInfo.format?.duration,
-                video: outputVideo.codec_name,
-                audio: outputAudio?.codec_name || "silent source"
-            });
+            stage = conversionSucceeded
+                ? "sending compressed video with audio"
+                : "sending original video with audio";
 
-            stage = "sending video";
-
-            if (outputStat.size <= MAX_VIDEO_SIZE) {
-                const buffer = await fs.promises.readFile(output);
-                await sock.sendMessage(chatId, {
-                    video: buffer,
-                    mimetype: "video/mp4",
-                    caption: CAPTION
-                }, { quoted: message });
-            } else {
-                await sock.sendMessage(chatId, {
-                    document: { url: output },
-                    mimetype: "video/mp4",
-                    fileName: "Instagram-Video.mp4",
-                    caption: CAPTION
-                }, { quoted: message });
-            }
+            await sendVideo(sock, chatId, message, sendFile, CAPTION);
 
             sent++;
-            log("Sent:", name);
+            log("Sent:", name, conversionSucceeded ? "compressed" : "original");
         }
 
         if (!sent) throw new Error("No media was successfully sent");
@@ -288,7 +284,7 @@ async function instagramCommand(sock, chatId, message) {
         log("FAILED STAGE:", stage);
         log("ERROR:", error.message);
         if (error.stderr) {
-            log("STDERR:", String(error.stderr).slice(-10000));
+            log("STDERR:", String(error.stderr).slice(-8000));
         }
 
         await sock.sendMessage(chatId, {
@@ -308,7 +304,7 @@ async function instagramCommand(sock, chatId, message) {
             await fs.promises.rm(dir, {
                 recursive: true,
                 force: true
-            }).catch(e => log("Cleanup failed:", e.message));
+            }).catch(error => log("Cleanup failed:", error.message));
         }
     }
 }
