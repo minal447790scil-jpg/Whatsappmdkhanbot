@@ -150,7 +150,7 @@ async function instagramCommand(sock, chatId, message) {
                 "-i", input,
                 "-map", "0:v:0",
                 "-map", "0:a:0?",
-                "-vf", "scale=min(1280\,iw):min(1280\,ih):force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
+                "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,setsar=1",
                 "-c:v", "libx264",
                 "-preset", "veryfast",
                 "-profile:v", "baseline",
