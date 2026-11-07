@@ -53,30 +53,37 @@ function extractTikTokUrl(text) {
 }
 
 // ==========================================
-// TIKWM API RESPONSE PARSER
-// Reads response as TEXT first, then parses JSON safely.
-// This prevents the raw "Unexpected end of JSON input" error.
+// TIKWM DIRECT POST API
+// POST form-data is used instead of GET query params.
+// Response is read as text before JSON.parse to handle
+// empty/invalid upstream responses safely.
 // ==========================================
 
 async function requestTikWM(url) {
-    const response = await axios.get(TIKWM_API, {
-        params: {
-            url,
-            hd: "1"
-        },
-        timeout: 30000,
-        responseType: "text",
-        transformResponse: [data => data],
-        headers: {
-            "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://www.tikwm.com/"
-        },
-        validateStatus: status => status >= 200 && status < 500
-    });
+    const form = new URLSearchParams();
+    form.append("url", url);
+    form.append("hd", "1");
+
+    const response = await axios.post(
+        TIKWM_API,
+        form.toString(),
+        {
+            timeout: 30000,
+            responseType: "text",
+            transformResponse: [data => data],
+            headers: {
+                "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Origin": "https://www.tikwm.com",
+                "Referer": "https://www.tikwm.com/"
+            },
+            validateStatus: status => status >= 200 && status < 500
+        }
+    );
 
     const raw = String(response.data || "").trim();
 
@@ -87,7 +94,7 @@ async function requestTikWM(url) {
     }
 
     if (!raw) {
-        throw new Error("TikWM returned an empty response (HTTP 200)");
+        throw new Error(`TikWM returned an empty response (HTTP ${response.status})`);
     }
 
     let parsed;
@@ -95,7 +102,7 @@ async function requestTikWM(url) {
         parsed = JSON.parse(raw);
     } catch {
         throw new Error(
-            `TikWM returned non-JSON/partial response: ${raw.slice(0, 180)}`
+            `TikWM returned invalid JSON: ${raw.slice(0, 180)}`
         );
     }
 
@@ -113,7 +120,7 @@ async function requestTikWM(url) {
 }
 
 // ==========================================
-// GET VIDEO URL WITH LIMITED RETRIES
+// GET VIDEO URL WITH RETRIES
 // ==========================================
 
 async function getTikTokVideo(url) {
@@ -121,7 +128,7 @@ async function getTikTokVideo(url) {
 
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-            console.log(`[TIKTOK] TikWM request ${attempt}/3`);
+            console.log(`[TIKTOK] TikWM POST attempt ${attempt}/3`);
 
             const data = await requestTikWM(url);
 
@@ -184,9 +191,7 @@ async function downloadVideo(url, filePath) {
 
     await new Promise((resolve, reject) => {
         const writer = fs.createWriteStream(filePath);
-
         response.data.pipe(writer);
-
         writer.on("finish", resolve);
         writer.on("error", error => {
             response.data.destroy();
@@ -251,7 +256,6 @@ async function tiktokCommand(sock, chatId, message) {
         console.log("========== TIKTOK DOWNLOAD ==========");
         console.log("URL:", query);
 
-        // Direct TikWM API call; no ruhend-scraper / internal JSON parser.
         const result = await getTikTokVideo(query);
         console.log("TikTok video URL resolved:", Boolean(result.videoUrl));
 
