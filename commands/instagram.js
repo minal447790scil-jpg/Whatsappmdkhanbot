@@ -1,4 +1,3 @@
-const ytdlp = require("youtube-dl-exec");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -6,6 +5,79 @@ const { promisify } = require("util");
 const { execFile } = require("child_process");
 
 const exec = promisify(execFile);
+
+// Instagram currently blocks many anonymous requests without a browser TLS fingerprint.
+// Install yt-dlp with curl-cffi once per Railway container, then use Chrome impersonation.
+let ytDlpReady = null;
+
+async function ensureYtDlp() {
+    if (!ytDlpReady) {
+        ytDlpReady = (async () => {
+            const pythonCandidates = ["python3", "python"];
+            let python = null;
+
+            for (const candidate of pythonCandidates) {
+                try {
+                    await run(candidate, ["--version"], { timeout: 15000 });
+                    python = candidate;
+                    break;
+                } catch (_) {}
+            }
+
+            if (!python) {
+                throw new Error(
+                    "Python 3 is required for cookie-free Instagram browser impersonation. " +
+                    "Install Python 3 in the Railway image; see README."
+                );
+            }
+
+            const installArgs = [
+                "-m", "pip", "install", "--user",
+                "--break-system-packages",
+                "--upgrade", "yt-dlp[default,curl-cffi]"
+            ];
+
+            try {
+                await run(python, installArgs, { timeout: 600000 });
+            } catch (error) {
+                const detail = String(error.stderr || error.message || error).slice(-1200);
+                throw new Error("Could not install yt-dlp/curl-cffi in Railway: " + detail);
+            }
+
+            await run(python, ["-m", "yt_dlp", "--version"], { timeout: 30000 });
+            return python;
+        })().catch(error => {
+            ytDlpReady = null;
+            throw error;
+        });
+    }
+
+    return ytDlpReady;
+}
+
+async function downloadInstagram(url, outputTemplate) {
+    const python = await ensureYtDlp();
+
+    const args = [
+        "-m", "yt_dlp",
+        "--ignore-config",
+        "--no-warnings",
+        "--no-progress",
+        "--format", "bestvideo+bestaudio/best",
+        "--merge-output-format", "mp4",
+        "--output", outputTemplate,
+        "--playlist-end", String(MAX_MEDIA),
+        "--retries", "10",
+        "--fragment-retries", "10",
+        "--extractor-retries", "5",
+        "--socket-timeout", "120",
+        "--concurrent-fragments", "4",
+        "--impersonate", "chrome",
+        url
+    ];
+
+    return run(python, args, { timeout: 900000 });
+}
 
 const CAPTION = "✅ DOWNLOADED BY SALMAN";
 const MAX_MEDIA = 10;
@@ -80,24 +152,10 @@ async function instagramCommand(sock, chatId, message) {
         // Download media. yt-dlp merges separate audio/video streams when needed.
         stage = "downloading Instagram media";
 
-        const options = {
-            output: path.join(dir, "%(autonumber)03d-%(id)s.%(ext)s"),
-            format: "bestvideo+bestaudio/best",
-            mergeOutputFormat: "mp4",
-            playlistEnd: MAX_MEDIA,
-            retries: 10,
-            fragmentRetries: 10,
-            extractorRetries: 5,
-            socketTimeout: 120,
-            concurrentFragments: 4,
-            noWarnings: true,
-            noProgress: true,
-            ignoreErrors: false
-        };
+        const outputTemplate = path.join(dir, "%(autonumber)03d-%(id)s.%(ext)s");
 
-
-        log("Starting download:", url);
-        await ytdlp(url, options);
+        log("Starting direct Instagram download with yt-dlp + curl-cffi impersonation:", url);
+        await downloadInstagram(url, outputTemplate);
 
         // Find downloaded images/videos.
         stage = "finding downloaded files";
@@ -291,7 +349,9 @@ async function instagramCommand(sock, chatId, message) {
             combinedError.includes("exceeded the rate-limit") ||
             combinedError.includes("redirected to the login page") ||
             combinedError.includes("use --cookies") ||
-            combinedError.includes("login required");
+            combinedError.includes("login required") ||
+            combinedError.includes("exceeded the rate-limit") ||
+            combinedError.includes("redirected to the login page");
 
         const errorMessage = [
             "❌ INSTAGRAM DOWNLOAD FAILED",
