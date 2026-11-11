@@ -1,5 +1,5 @@
 
-FROM node:22-bookworm
+FROM node:20-bookworm
 
 # System dependencies
 RUN apt-get update && apt-get install -y \
@@ -19,23 +19,21 @@ RUN curl -fsSL https://deno.land/install.sh | sh \
 # Python virtual environment
 RUN python3 -m venv /opt/instagram-venv
 
-# Install pinned Instagram downloader
+# Install parth-dl
 RUN /opt/instagram-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/instagram-venv/bin/pip install --no-cache-dir "parth-dl==1.2.1"
 
-# Environment variables
+# Environment
 ENV PATH="/opt/instagram-venv/bin:/root/.deno/bin:${PATH}"
 ENV PYTHONUNBUFFERED=1
 
-# Application directory
 WORKDIR /app
 
 # Install Node dependencies
 COPY package*.json ./
 RUN npm install --omit=dev
 
-# Copy application
+# Copy bot files
 COPY . .
 
-# Start application
 CMD ["npm", "start"]
