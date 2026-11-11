@@ -6,65 +6,14 @@ const { execFile } = require("child_process");
 
 const exec = promisify(execFile);
 
-// Instagram currently blocks many anonymous requests without a browser TLS fingerprint.
-// Install yt-dlp with curl-cffi once per Railway container, then use Chrome impersonation.
-let ytDlpReady = null;
-
-async function ensureYtDlp() {
-    // yt-dlp and curl-cffi are installed during the Docker image build
-    // in /opt/instagram-venv. Do not run pip at bot runtime and do not use --user.
-    const pythonCandidates = ["python3", "python"];
-    let python = null;
-
-    for (const candidate of pythonCandidates) {
-        try {
-            await run(candidate, [
-                "-c",
-                "import yt_dlp, curl_cffi; print(yt_dlp.version.__version__)"
-            ], { timeout: 30000 });
-            python = candidate;
-            break;
-        } catch (_) {}
-    }
-
-    if (!python) {
-        throw new Error(
-            "yt-dlp/curl-cffi are not available in the Docker Python environment. " +
-            "Check that Dockerfile installs them in /opt/instagram-venv and that " +
-            "PATH includes /opt/instagram-venv/bin. Do not run pip install --user."
-        );
-    }
-
-    return python;
-}
-
-async function downloadInstagram(url, outputTemplate) {
-    const python = await ensureYtDlp();
-
-    const args = [
-        "-m", "yt_dlp",
-        "--ignore-config",
-        "--no-warnings",
-        "--no-progress",
-        "--format", "bestvideo+bestaudio/best",
-        "--merge-output-format", "mp4",
-        "--output", outputTemplate,
-        "--playlist-end", String(MAX_MEDIA),
-        "--retries", "10",
-        "--fragment-retries", "10",
-        "--extractor-retries", "5",
-        "--socket-timeout", "120",
-        "--concurrent-fragments", "4",
-        "--impersonate", "chrome",
-        url
-    ];
-
-    return run(python, args, { timeout: 900000 });
-}
-
 const CAPTION = "✅ DOWNLOADED BY SALMAN";
 const MAX_MEDIA = 10;
 const MAX_VIDEO_SIZE = 60 * 1024 * 1024;
+const INSTAGRAM_HOSTS = new Set([
+    "instagram.com",
+    "www.instagram.com",
+    "m.instagram.com"
+]);
 
 function log(...args) {
     console.log("[INSTAGRAM]", new Date().toISOString(), ...args);
@@ -72,10 +21,29 @@ function log(...args) {
 
 async function run(command, args, options = {}) {
     return exec(command, args, {
-        timeout: 600000,
+        timeout: 300000,
         maxBuffer: 20 * 1024 * 1024,
         ...options
     });
+}
+
+function validateInstagramUrl(rawUrl) {
+    let parsed;
+    try {
+        parsed = new URL(rawUrl);
+    } catch {
+        throw new Error("Invalid Instagram URL.");
+    }
+
+    if (!INSTAGRAM_HOSTS.has(parsed.hostname.toLowerCase())) {
+        throw new Error("Please send a valid Instagram link.");
+    }
+
+    if (!/^\/(reel|reels|p|tv)\/[A-Za-z0-9_-]+\/?$/i.test(parsed.pathname)) {
+        throw new Error("Supported links: public Instagram Reels and posts.");
+    }
+
+    return parsed.toString();
 }
 
 async function instagramCommand(sock, chatId, message) {
@@ -84,7 +52,6 @@ async function instagramCommand(sock, chatId, message) {
     let url = "";
 
     try {
-        // Extract URL from the incoming WhatsApp message.
         stage = "extracting Instagram URL";
 
         const root = message.message || {};
@@ -102,158 +69,114 @@ async function instagramCommand(sock, chatId, message) {
             "";
 
         const match = text.match(
-            /https?:\/\/(?:www\.|m\.)?instagram\.com\/[^\s]+/i
+            /https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:reel|reels|p|tv)\/[A-Za-z0-9_-]+\/?(?:\?[^\s]*)?/i
         );
 
         if (!match) {
             return await sock.sendMessage(chatId, {
-                text: "❌ Send an Instagram Reel/Post link.\n\nExample:\n.ig https://www.instagram.com/reel/ID/"
+                text: "❌ Send a public Instagram Reel/Post link.\n\nExample:\n.ig https://www.instagram.com/reel/ID/"
             }, { quoted: message });
         }
 
-        url = match[0].replace(/[),.!]+$/, "");
-        const parsed = new URL(url);
+        url = validateInstagramUrl(match[0].replace(/[),.!]+$/, ""));
 
-        if (!["instagram.com", "www.instagram.com", "m.instagram.com"]
-            .includes(parsed.hostname.toLowerCase())) {
-            throw new Error("Invalid Instagram URL");
-        }
-
-        // Verify FFmpeg tools are installed in the Railway container.
-        stage = "checking FFmpeg and FFprobe";
+        stage = "checking downloader and FFmpeg";
+        await run("parth-dl", ["--version"]);
         await run("ffmpeg", ["-version"]);
         await run("ffprobe", ["-version"]);
 
-        dir = await fs.promises.mkdtemp(
-            path.join(os.tmpdir(), "instagram-")
-        );
+        dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "instagram-"));
 
         await sock.sendMessage(chatId, {
             react: { text: "📥", key: message.key }
         }).catch(() => {});
 
-        // Download media. yt-dlp merges separate audio/video streams when needed.
-        stage = "downloading Instagram media";
+        stage = "downloading public Instagram media with parth-dl";
+        log("Starting parth-dl download:", url);
 
-        const outputTemplate = path.join(dir, "%(autonumber)03d-%(id)s.%(ext)s");
+        try {
+            const result = await run("parth-dl", [
+                url,
+                "--paths", dir,
+                "--force"
+            ], { timeout: 300000 });
+            log("parth-dl output:", (result.stdout || "").slice(-2000));
+        } catch (downloadError) {
+            const details = [
+                downloadError.message || "",
+                downloadError.stderr || "",
+                downloadError.stdout || ""
+            ].join("\n");
 
-        log("Starting direct Instagram download with yt-dlp + curl-cffi impersonation:", url);
-        await downloadInstagram(url, outputTemplate);
+            if (/rate.limit|rate limited|429/i.test(details)) {
+                throw new Error("Instagram is rate-limiting anonymous requests from this server. Try again later; no cookies or login are used.");
+            }
+            if (/login wall|login required|redirected to the login/i.test(details)) {
+                throw new Error("Instagram is showing a login wall for this public link. parth-dl cannot download links Instagram restricts to logged-in users.");
+            }
+            throw new Error(`parth-dl download failed: ${details.slice(-1800) || "No error details returned"}`);
+        }
 
-        // Find downloaded images/videos.
         stage = "finding downloaded files";
-
+        const allowedExtensions = /\.(mp4|m4v|mov|webm|mkv|jpg|jpeg|png|webp)$/i;
         const files = (await fs.promises.readdir(dir))
-            .filter(name =>
-                /\.(mp4|m4v|mov|webm|mkv|jpg|jpeg|png|webp)$/i.test(name)
-            )
-            .sort();
+            .filter(name => allowedExtensions.test(name))
+            .sort()
+            .slice(0, MAX_MEDIA);
 
         if (!files.length) {
-            throw new Error(
-                "No media downloaded. Instagram may require login or the content may be unavailable."
-            );
+            throw new Error("Downloader finished but no media files were found.");
         }
 
         let sent = 0;
 
-        for (const name of files.slice(0, MAX_MEDIA)) {
+        for (const name of files) {
             const input = path.join(dir, name);
             const isImage = /\.(jpg|jpeg|png|webp)$/i.test(name);
 
             if (isImage) {
                 stage = "sending image";
                 const imageBuffer = await fs.promises.readFile(input);
-
-                if (!imageBuffer.length) {
-                    throw new Error("Empty image: " + name);
-                }
+                if (!imageBuffer.length) throw new Error("Empty image: " + name);
 
                 await sock.sendMessage(chatId, {
                     image: imageBuffer,
                     caption: CAPTION
                 }, { quoted: message });
-
                 sent++;
                 continue;
             }
 
-            // Convert VP9/large/high-FPS Instagram sources to WhatsApp-friendly H.264.
-            // Use a fast first pass and a lower-resolution fallback for memory/CPU-limited hosts.
             stage = "converting video to WhatsApp-compatible MP4";
-
             const output = path.join(dir, `converted-${sent + 1}.mp4`);
 
-            const conversionProfiles = [
-                {
-                    label: "720p/30fps",
-                    vf: "scale=720:1280:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
-                    fps: "30",
-                    crf: "27"
-                },
-                {
-                    label: "480p/24fps fallback",
-                    vf: "scale=480:854:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
-                    fps: "24",
-                    crf: "30"
-                }
-            ];
-
-            let conversionError = null;
-            for (const profile of conversionProfiles) {
-                try {
-                    await run("ffmpeg", [
-                        "-y",
-                        "-hide_banner",
-                        "-loglevel", "error",
-                        "-fflags", "+genpts",
-                        "-i", input,
-                        "-map", "0:v:0",
-                        "-map", "0:a:0?",
-                        "-vf", profile.vf,
-                        "-c:v", "libx264",
-                        "-preset", "ultrafast",
-                        "-tune", "fastdecode",
-                        "-crf", profile.crf,
-                        "-profile:v", "baseline",
-                        "-pix_fmt", "yuv420p",
-                        "-r", profile.fps,
-                        "-threads", "2",
-                        "-c:a", "aac",
-                        "-b:a", "96k",
-                        "-ar", "44100",
-                        "-ac", "2",
-                        "-max_muxing_queue_size", "2048",
-                        "-avoid_negative_ts", "make_zero",
-                        "-movflags", "+faststart",
-                        "-f", "mp4",
-                        output
-                    ], { timeout: 600000 });
-
-                    const convertedStat = await fs.promises.stat(output);
-                    if (convertedStat.size > 0) {
-                        log("Conversion completed using", profile.label);
-                        conversionError = null;
-                        break;
-                    }
-                    throw new Error("FFmpeg produced an empty MP4");
-                } catch (err) {
-                    conversionError = err;
-                    log("Conversion profile failed:", profile.label,
-                        String(err.stderr || err.message || err).slice(-1200));
-                    await fs.promises.rm(output, { force: true }).catch(() => {});
-                }
-            }
-
-            if (conversionError) {
-                const details = String(conversionError.stderr || conversionError.message || conversionError);
-                throw new Error("FFmpeg conversion failed on both 720p and 480p profiles: " + details.slice(-1800));
-            }
+            await run("ffmpeg", [
+                "-y",
+                "-fflags", "+genpts",
+                "-i", input,
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,setsar=1",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-profile:v", "baseline",
+                "-level", "3.1",
+                "-pix_fmt", "yuv420p",
+                "-r", "30",
+                "-fps_mode", "cfr",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-ar", "44100",
+                "-ac", "2",
+                "-max_muxing_queue_size", "2048",
+                "-avoid_negative_ts", "make_zero",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                output
+            ]);
 
             const stat = await fs.promises.stat(output);
-            if (!stat.size) {
-                throw new Error("FFmpeg produced an empty MP4");
-            }
+            if (!stat.size) throw new Error("FFmpeg produced an empty MP4");
 
             const { stdout } = await run("ffprobe", [
                 "-v", "error",
@@ -264,46 +187,33 @@ async function instagramCommand(sock, chatId, message) {
             ]);
 
             const probe = JSON.parse(stdout);
-            const videoStream = probe.streams?.find(
-                stream => stream.codec_type === "video"
-            );
-            const audioStream = probe.streams?.find(
-                stream => stream.codec_type === "audio"
-            );
+            const videoStream = probe.streams?.find(stream => stream.codec_type === "video");
+            const audioStream = probe.streams?.find(stream => stream.codec_type === "audio");
             const duration = Number(probe.format?.duration || 0);
 
-            if (!videoStream ||
-                videoStream.codec_name !== "h264" ||
+            if (!videoStream || videoStream.codec_name !== "h264" ||
                 videoStream.pix_fmt !== "yuv420p" ||
                 !String(probe.format?.format_name || "").includes("mp4") ||
-                !Number.isFinite(duration) ||
-                duration <= 0) {
+                !Number.isFinite(duration) || duration <= 0) {
                 throw new Error("Converted MP4 failed playback validation");
             }
-
             if (audioStream && audioStream.codec_name !== "aac") {
                 throw new Error("Converted MP4 audio is not AAC");
             }
 
-            const sendFile = output;
-            const sendMime = "video/mp4";
-            log("WhatsApp-compatible MP4 ready:", name, stat.size, "bytes");
             stage = "sending video";
-            const sendStat = await fs.promises.stat(sendFile);
-            if (!sendStat.size) throw new Error("Video file is empty");
-
-            if (sendStat.size <= MAX_VIDEO_SIZE) {
-                const buffer = await fs.promises.readFile(sendFile);
+            if (stat.size <= MAX_VIDEO_SIZE) {
+                const buffer = await fs.promises.readFile(output);
                 await sock.sendMessage(chatId, {
                     video: buffer,
-                    mimetype: sendMime,
+                    mimetype: "video/mp4",
                     caption: CAPTION
                 }, { quoted: message });
             } else {
                 await sock.sendMessage(chatId, {
-                    document: { url: sendFile },
-                    mimetype: sendMime,
-                    fileName: path.basename(sendFile),
+                    document: { url: output },
+                    mimetype: "video/mp4",
+                    fileName: path.basename(output),
                     caption: CAPTION
                 }, { quoted: message });
             }
@@ -312,12 +222,9 @@ async function instagramCommand(sock, chatId, message) {
             log("Successfully sent:", name);
         }
 
-        if (sent === 0) {
-            throw new Error("No media was sent");
-        }
+        if (!sent) throw new Error("No media was sent");
 
         log("SUCCESS:", sent, "media files sent");
-
         await sock.sendMessage(chatId, {
             react: { text: "✅", key: message.key }
         }).catch(() => {});
@@ -327,29 +234,12 @@ async function instagramCommand(sock, chatId, message) {
         log("ERROR:", error.message);
         log("STDERR:", error.stderr || "N/A");
 
-        const combinedError = `${error.message || ""} ${error.stderr || ""}`.toLowerCase();
-        const isAnonymousRateLimit =
-            combinedError.includes("exceeded the rate-limit") ||
-            combinedError.includes("redirected to the login page") ||
-            combinedError.includes("use --cookies") ||
-            combinedError.includes("login required") ||
-            combinedError.includes("exceeded the rate-limit") ||
-            combinedError.includes("redirected to the login page");
-
         const errorMessage = [
             "❌ INSTAGRAM DOWNLOAD FAILED",
-            ...(isAnonymousRateLimit ? [
-                "",
-                "Instagram is blocking anonymous access from this server (rate limit/login required).",
-                "This version does not use cookies, login, API keys, or paid APIs.",
-                "A public-link-only download cannot be guaranteed while Instagram blocks the server."
-            ] : []),
             "",
             "Stage: " + stage,
             "Error: " + (error.message || String(error)),
-            error.stderr
-                ? "Details:\n" + String(error.stderr).slice(-1500)
-                : ""
+            error.stderr ? "Details:\n" + String(error.stderr).slice(-1200) : ""
         ].filter(Boolean).join("\n");
 
         await sock.sendMessage(chatId, {
@@ -365,9 +255,7 @@ async function instagramCommand(sock, chatId, message) {
             await fs.promises.rm(dir, {
                 recursive: true,
                 force: true
-            }).catch(error => {
-                log("Cleanup failed:", error.message);
-            });
+            }).catch(error => log("Cleanup failed:", error.message));
         }
     }
 }
