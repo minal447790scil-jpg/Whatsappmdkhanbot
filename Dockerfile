@@ -1,7 +1,7 @@
 
 FROM node:22-bookworm
 
-# Install system dependencies
+# System dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     python3 \
@@ -13,26 +13,28 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Deno
-ENV DENO_INSTALL=/root/.deno
-ENV PATH="/root/.deno/bin:${PATH}"
-
 RUN curl -fsSL https://deno.land/install.sh | sh \
-    && ln -sf /root/.deno/bin/deno /usr/local/bin/deno
+    && ln -s /root/.deno/bin/deno /usr/local/bin/deno
 
-# Create Python virtual environment and install yt-dlp + curl-cffi
-RUN python3 -m venv /opt/instagram-venv \
-    && /opt/instagram-venv/bin/python -m pip install --upgrade pip setuptools wheel \
-    && /opt/instagram-venv/bin/python -m pip install --upgrade "yt-dlp[default,curl-cffi]"
+# Python virtual environment
+RUN python3 -m venv /opt/instagram-venv
 
-# Make the virtual environment's Python available
-ENV PATH="/opt/instagram-venv/bin:${PATH}"
+# Install Instagram downloader
+RUN /opt/instagram-venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/instagram-venv/bin/pip install --no-cache-dir parth-dl
 
+# Make Python downloader available
+ENV PATH="/opt/instagram-venv/bin:/root/.deno/bin:${PATH}"
+
+# Application directory
 WORKDIR /app
 
+# Install Node dependencies
 COPY package*.json ./
+RUN npm install --omit=dev
 
-RUN npm install
-
+# Copy application files
 COPY . .
 
+# Start bot
 CMD ["npm", "start"]
