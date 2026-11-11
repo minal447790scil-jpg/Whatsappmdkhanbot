@@ -19,12 +19,13 @@ RUN curl -fsSL https://deno.land/install.sh | sh \
 # Python virtual environment
 RUN python3 -m venv /opt/instagram-venv
 
-# Install Instagram downloader
+# Install pinned Instagram downloader
 RUN /opt/instagram-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/instagram-venv/bin/pip install --no-cache-dir parth-dl
+    && /opt/instagram-venv/bin/pip install --no-cache-dir "parth-dl==1.2.1"
 
-# Make Python downloader available
+# Environment variables
 ENV PATH="/opt/instagram-venv/bin:/root/.deno/bin:${PATH}"
+ENV PYTHONUNBUFFERED=1
 
 # Application directory
 WORKDIR /app
@@ -33,8 +34,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 
-# Copy application files
+# Copy application
 COPY . .
 
-# Start bot
+# Start application
 CMD ["npm", "start"]
