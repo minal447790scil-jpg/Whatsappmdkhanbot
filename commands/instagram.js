@@ -17,7 +17,7 @@ function log(...args) {
 
 async function run(command, args, options = {}) {
     return exec(command, args, {
-        timeout: 300000,
+        timeout: 600000,
         maxBuffer: 20 * 1024 * 1024,
         ...options
     });
@@ -137,37 +137,77 @@ async function instagramCommand(sock, chatId, message) {
                 continue;
             }
 
-            // Convert every video to a WhatsApp-compatible MP4.
-            // Do not fall back to the unconverted source: that can produce a
-            // message that uploads successfully but cannot play in WhatsApp.
+            // Convert VP9/large/high-FPS Instagram sources to WhatsApp-friendly H.264.
+            // Use a fast first pass and a lower-resolution fallback for memory/CPU-limited hosts.
             stage = "converting video to WhatsApp-compatible MP4";
 
             const output = path.join(dir, `converted-${sent + 1}.mp4`);
 
-            await run("ffmpeg", [
-                "-y",
-                "-fflags", "+genpts",
-                "-i", input,
-                "-map", "0:v:0",
-                "-map", "0:a:0?",
-                "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,setsar=1",
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-profile:v", "baseline",
-                "-level", "3.1",
-                "-pix_fmt", "yuv420p",
-                "-r", "30",
-                "-fps_mode", "cfr",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-ar", "44100",
-                "-ac", "2",
-                "-max_muxing_queue_size", "2048",
-                "-avoid_negative_ts", "make_zero",
-                "-movflags", "+faststart",
-                "-f", "mp4",
-                output
-            ]);
+            const conversionProfiles = [
+                {
+                    label: "720p/30fps",
+                    vf: "scale=720:1280:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
+                    fps: "30",
+                    crf: "27"
+                },
+                {
+                    label: "480p/24fps fallback",
+                    vf: "scale=480:854:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
+                    fps: "24",
+                    crf: "30"
+                }
+            ];
+
+            let conversionError = null;
+            for (const profile of conversionProfiles) {
+                try {
+                    await run("ffmpeg", [
+                        "-y",
+                        "-hide_banner",
+                        "-loglevel", "error",
+                        "-fflags", "+genpts",
+                        "-i", input,
+                        "-map", "0:v:0",
+                        "-map", "0:a:0?",
+                        "-vf", profile.vf,
+                        "-c:v", "libx264",
+                        "-preset", "ultrafast",
+                        "-tune", "fastdecode",
+                        "-crf", profile.crf,
+                        "-profile:v", "baseline",
+                        "-pix_fmt", "yuv420p",
+                        "-r", profile.fps,
+                        "-threads", "2",
+                        "-c:a", "aac",
+                        "-b:a", "96k",
+                        "-ar", "44100",
+                        "-ac", "2",
+                        "-max_muxing_queue_size", "2048",
+                        "-avoid_negative_ts", "make_zero",
+                        "-movflags", "+faststart",
+                        "-f", "mp4",
+                        output
+                    ], { timeout: 600000 });
+
+                    const convertedStat = await fs.promises.stat(output);
+                    if (convertedStat.size > 0) {
+                        log("Conversion completed using", profile.label);
+                        conversionError = null;
+                        break;
+                    }
+                    throw new Error("FFmpeg produced an empty MP4");
+                } catch (err) {
+                    conversionError = err;
+                    log("Conversion profile failed:", profile.label,
+                        String(err.stderr || err.message || err).slice(-1200));
+                    await fs.promises.rm(output, { force: true }).catch(() => {});
+                }
+            }
+
+            if (conversionError) {
+                const details = String(conversionError.stderr || conversionError.message || conversionError);
+                throw new Error("FFmpeg conversion failed on both 720p and 480p profiles: " + details.slice(-1800));
+            }
 
             const stat = await fs.promises.stat(output);
             if (!stat.size) {
