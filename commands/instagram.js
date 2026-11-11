@@ -11,48 +11,31 @@ const exec = promisify(execFile);
 let ytDlpReady = null;
 
 async function ensureYtDlp() {
-    if (!ytDlpReady) {
-        ytDlpReady = (async () => {
-            const pythonCandidates = ["python3", "python"];
-            let python = null;
+    // yt-dlp and curl-cffi are installed during the Docker image build
+    // in /opt/instagram-venv. Do not run pip at bot runtime and do not use --user.
+    const pythonCandidates = ["python3", "python"];
+    let python = null;
 
-            for (const candidate of pythonCandidates) {
-                try {
-                    await run(candidate, ["--version"], { timeout: 15000 });
-                    python = candidate;
-                    break;
-                } catch (_) {}
-            }
-
-            if (!python) {
-                throw new Error(
-                    "Python 3 is required for cookie-free Instagram browser impersonation. " +
-                    "Install Python 3 in the Railway image; see README."
-                );
-            }
-
-            const installArgs = [
-                "-m", "pip", "install", "--user",
-                "--break-system-packages",
-                "--upgrade", "yt-dlp[default,curl-cffi]"
-            ];
-
-            try {
-                await run(python, installArgs, { timeout: 600000 });
-            } catch (error) {
-                const detail = String(error.stderr || error.message || error).slice(-1200);
-                throw new Error("Could not install yt-dlp/curl-cffi in Railway: " + detail);
-            }
-
-            await run(python, ["-m", "yt_dlp", "--version"], { timeout: 30000 });
-            return python;
-        })().catch(error => {
-            ytDlpReady = null;
-            throw error;
-        });
+    for (const candidate of pythonCandidates) {
+        try {
+            await run(candidate, [
+                "-c",
+                "import yt_dlp, curl_cffi; print(yt_dlp.version.__version__)"
+            ], { timeout: 30000 });
+            python = candidate;
+            break;
+        } catch (_) {}
     }
 
-    return ytDlpReady;
+    if (!python) {
+        throw new Error(
+            "yt-dlp/curl-cffi are not available in the Docker Python environment. " +
+            "Check that Dockerfile installs them in /opt/instagram-venv and that " +
+            "PATH includes /opt/instagram-venv/bin. Do not run pip install --user."
+        );
+    }
+
+    return python;
 }
 
 async function downloadInstagram(url, outputTemplate) {
