@@ -246,8 +246,21 @@ async function instagramCommand(sock, chatId, message) {
         log("ERROR:", error.message);
         log("STDERR:", error.stderr || "N/A");
 
+        const combinedError = `${error.message || ""} ${error.stderr || ""}`.toLowerCase();
+        const isAnonymousRateLimit =
+            combinedError.includes("exceeded the rate-limit") ||
+            combinedError.includes("redirected to the login page") ||
+            combinedError.includes("use --cookies") ||
+            combinedError.includes("login required");
+
         const errorMessage = [
             "❌ INSTAGRAM DOWNLOAD FAILED",
+            ...(isAnonymousRateLimit ? [
+                "",
+                "Instagram is blocking anonymous access from this server (rate limit/login required).",
+                "This version does not use cookies, login, API keys, or paid APIs.",
+                "A public-link-only download cannot be guaranteed while Instagram blocks the server."
+            ] : []),
             "",
             "Stage: " + stage,
             "Error: " + (error.message || String(error)),
