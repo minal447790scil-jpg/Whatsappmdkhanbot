@@ -30,6 +30,10 @@ async function vvCommand(sock, from, msg) {
                 buffer = Buffer.concat([buffer, chunk]);
             }
 
+            if (buffer.length === 0) {
+                throw new Error("Media expired ya server par available nahi hai");
+            }
+
             if (vType === 'imageMessage') {
                 await sock.sendMessage(owner, {
                     image: buffer,
@@ -58,7 +62,7 @@ async function vvCommand(sock, from, msg) {
 
         } catch (e) {
             await sock.sendMessage(from, {
-                text: "Failed to download View-Once media."
+                text: "Failed to download View-Once media.\n\n*Reason:* " + (e?.message || e)
             }, { quoted: msg });
         }
 
