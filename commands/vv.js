@@ -1,4 +1,4 @@
-const { downloadContentFromMessage, extractMessageContent } = require('@whiskeysockets/baileys');
+const { downloadMediaMessage } = require('@whiskeysockets/baileys');
 
 async function vvCommand(sock, from, msg) {
 
@@ -12,55 +12,54 @@ async function vvCommand(sock, from, msg) {
         }, { quoted: msg });
     }
 
-    // View-Once ka wrapper kholne ke liye
+    // View-Once wrapper ko kholne ke liye
     const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage;
     const rawMessage = viewOnce ? viewOnce.message : quoted;
     
-    // Asal media message nikalne ke liye
-    const message = extractMessageContent(rawMessage) || rawMessage;
-    
-    const vType = Object.keys(message)[0];
+    const vType = Object.keys(rawMessage)[0];
 
     if (['imageMessage', 'videoMessage', 'audioMessage'].includes(vType)) {
         try {
-            const stream = await downloadContentFromMessage(
-                message[vType],
-                vType.replace('Message', '')
+            // downloadMediaMessage use kar rahe hain jo empty key ko khud handle karta hai
+            const buffer = await downloadMediaMessage(
+                { message: rawMessage }, 
+                'buffer',
+                {},
+                { 
+                    logger: console,
+                    reuploadRequest: sock.updateMediaMessage // Expired media ko dobara mangwata hai
+                }
             );
 
-            let buffer = Buffer.from([]);
-
-            for await (const chunk of stream) {
-                buffer = Buffer.concat([buffer, chunk]);
-            }
-
             if (buffer.length === 0) {
-                throw new Error("Media expired ya server par available nahi hai");
+                throw new Error("Media expire ya server par available nahi hai");
             }
+
+            const caption = "Downloaded By Salman";
 
             if (vType === 'imageMessage') {
                 await sock.sendMessage(owner, {
                     image: buffer,
-                    caption: "Downloaded By Salman"
+                    caption: caption
                 });
             }
 
             else if (vType === 'videoMessage') {
                 await sock.sendMessage(owner, {
                     video: buffer,
-                    caption: "Downloaded By Salman"
+                    caption: caption
                 });
             }
 
             else if (vType === 'audioMessage') {
                 await sock.sendMessage(owner, {
                     audio: buffer,
-                    mimetype: message[vType].mimetype || 'audio/mp4',
-                    ptt: message[vType].ptt || false
+                    mimetype: rawMessage[vType].mimetype || 'audio/mp4',
+                    ptt: rawMessage[vType].ptt || false
                 });
 
                 await sock.sendMessage(owner, {
-                    text: "Downloaded By Salman"
+                    text: caption
                 });
             }
 
@@ -72,7 +71,7 @@ async function vvCommand(sock, from, msg) {
 
     } else {
         await sock.sendMessage(from, {
-            text: "This is not a View-Once media message.\n\n*Type found:* " + vType
+            text: "This is not a View-Once media message."
         }, { quoted: msg });
     }
 }
