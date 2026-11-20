@@ -1,75 +1,122 @@
-const { downloadMediaMessage } = require('@redxmini/redx-baileys');
+const {
+    downloadMediaMessage
+} = require('@whiskeysockets/baileys');
 
 async function vvCommand(sock, from, msg) {
     const owner = "923416647737@s.whatsapp.net";
-    const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+
+    const contextInfo =
+        msg.message?.extendedTextMessage?.contextInfo;
+
+    const quoted = contextInfo?.quotedMessage;
 
     if (!quoted) {
         return await sock.sendMessage(from, {
-            text: "Please reply to a View-Once message."
+            text: "Please reply to a media message."
         }, { quoted: msg });
     }
 
-    // View-Once wrapper ko kholne ke liye
-    const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage;
-    const rawMessage = viewOnce ? viewOnce.message : quoted;
-    
-    const vType = Object.keys(rawMessage)[0];
+    // Check owner
+    const sender =
+        msg.key?.participant || msg.key?.remoteJid;
 
-    if (['imageMessage', 'videoMessage', 'audioMessage'].includes(vType)) {
-        try {
-            // Nayi library mein downloadMediaMessage sabse best kaam karta hai
-            const buffer = await downloadMediaMessage(
-                { message: rawMessage }, 
-                'buffer',
-                {},
-                { 
-                    logger: console,
-                    reuploadRequest: sock.updateMediaMessage // Expired media ke liye
-                }
-            );
+    if (sender !== owner) {
+        return;
+    }
 
-            if (!buffer || buffer.length === 0) {
-                throw new Error("Media expire ya server par available nahi hai");
-            }
+    try {
+        let rawMessage = quoted;
 
-            const caption = "Downloaded By Salman";
+        // Handle ephemeral wrapper
+        while (rawMessage.ephemeralMessage?.message) {
+            rawMessage = rawMessage.ephemeralMessage.message;
+        }
 
-            if (vType === 'imageMessage') {
-                await sock.sendMessage(owner, {
-                    image: buffer,
-                    caption: caption
-                });
-            }
-
-            else if (vType === 'videoMessage') {
-                await sock.sendMessage(owner, {
-                    video: buffer,
-                    caption: caption
-                });
-            }
-
-            else if (vType === 'audioMessage') {
-                await sock.sendMessage(owner, {
-                    audio: buffer,
-                    mimetype: rawMessage[vType].mimetype || 'audio/mp4',
-                    ptt: rawMessage[vType].ptt || false
-                });
-
-                await sock.sendMessage(owner, {
-                    text: caption
-                });
-            }
-
-        } catch (e) {
-            await sock.sendMessage(from, {
-                text: "Failed to download View-Once media.\n\n*Reason:* " + (e?.message || e)
+        // View-Once protection check
+        if (
+            rawMessage.viewOnceMessage ||
+            rawMessage.viewOnceMessageV2 ||
+            rawMessage.viewOnceMessageV2Extension
+        ) {
+            return await sock.sendMessage(from, {
+                text: "View-Once media is not supported."
             }, { quoted: msg });
         }
 
-    } else {
+        const vType = Object.keys(rawMessage).find(type =>
+            [
+                'imageMessage',
+                'videoMessage',
+                'audioMessage'
+            ].includes(type)
+        );
+
+        if (!vType) {
+            return await sock.sendMessage(from, {
+                text: "This is not a supported media message."
+            }, { quoted: msg });
+        }
+
+        const quotedMsg = {
+            key: {
+                remoteJid: from,
+                id: contextInfo.stanzaId,
+                participant: contextInfo.participant
+            },
+            message: rawMessage
+        };
+
+        const buffer = await downloadMediaMessage(
+            quotedMsg,
+            'buffer',
+            {},
+            {
+                logger: console,
+                reuploadRequest: sock.updateMediaMessage
+                    ? sock.updateMediaMessage.bind(sock)
+                    : undefined
+            }
+        );
+
+        if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+            throw new Error("Media buffer is empty or unavailable.");
+        }
+
+        const caption = "Downloaded By Salman";
+        const media = rawMessage[vType];
+
+        if (vType === 'imageMessage') {
+            await sock.sendMessage(owner, {
+                image: buffer,
+                caption
+            });
+        }
+
+        else if (vType === 'videoMessage') {
+            await sock.sendMessage(owner, {
+                video: buffer,
+                caption
+            });
+        }
+
+        else if (vType === 'audioMessage') {
+            await sock.sendMessage(owner, {
+                audio: buffer,
+                mimetype: media.mimetype || 'audio/mp4',
+                ptt: media.ptt || false
+            });
+
+            await sock.sendMessage(owner, {
+                text: caption
+            });
+        }
+
+    } catch (e) {
+        console.error("Download Error:", e);
+
         await sock.sendMessage(from, {
-            text: "This is not a View-Once media message."
+            text: "Failed to download media.\n\n*Reason:* " +
+                (e?.message || String(e))
         }, { quoted: msg });
     }
 }
