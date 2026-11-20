@@ -295,7 +295,7 @@ class BotSession {
                 },
 	                printQRInTerminal: false,
              logger: P({ level: 'fatal' }),
-         browser: Browsers.androidPhone('Chrome'), // 👈 YEH CHANGE KAR DEIN
+         browser: Browsers.ubuntu('Chrome'), // 👈 YEH CHANGE KAR DEIN
          syncFullHistory: true,
 	                shouldSyncHistoryMessage: () => true,
 	                markOnlineOnConnect: true,
