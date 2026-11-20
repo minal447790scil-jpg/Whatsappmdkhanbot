@@ -1,9 +1,7 @@
-const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { downloadMediaMessage } = require('@redxmini/redx-baileys');
 
 async function vvCommand(sock, from, msg) {
-
     const owner = "923416647737@s.whatsapp.net";
-
     const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
 
     if (!quoted) {
@@ -20,18 +18,18 @@ async function vvCommand(sock, from, msg) {
 
     if (['imageMessage', 'videoMessage', 'audioMessage'].includes(vType)) {
         try {
-            // downloadMediaMessage use kar rahe hain jo empty key ko khud handle karta hai
+            // Nayi library mein downloadMediaMessage sabse best kaam karta hai
             const buffer = await downloadMediaMessage(
                 { message: rawMessage }, 
                 'buffer',
                 {},
                 { 
                     logger: console,
-                    reuploadRequest: sock.updateMediaMessage // Expired media ko dobara mangwata hai
+                    reuploadRequest: sock.updateMediaMessage // Expired media ke liye
                 }
             );
 
-            if (buffer.length === 0) {
+            if (!buffer || buffer.length === 0) {
                 throw new Error("Media expire ya server par available nahi hai");
             }
 
