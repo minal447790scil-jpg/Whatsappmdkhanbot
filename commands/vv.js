@@ -1,4 +1,4 @@
-const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
+const { downloadContentFromMessage, normalizeMessageContent } = require('@whiskeysockets/baileys');
 
 async function vvCommand(sock, from, msg) {
 
@@ -12,9 +12,13 @@ async function vvCommand(sock, from, msg) {
         }, { quoted: msg });
     }
 
+    // View-Once wrapper ko kholne ke liye
     const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage;
-    const message = viewOnce ? viewOnce.message : quoted;
-
+    const rawMessage = viewOnce ? viewOnce.message : quoted;
+    
+    // normalizeMessageContent se andar ka asal media message nikalta hai
+    const message = normalizeMessageContent(rawMessage) || rawMessage;
+    
     const vType = Object.keys(message)[0];
 
     if (['imageMessage', 'videoMessage', 'audioMessage'].includes(vType)) {
@@ -68,7 +72,7 @@ async function vvCommand(sock, from, msg) {
 
     } else {
         await sock.sendMessage(from, {
-            text: "This is not a View-Once media message."
+            text: "This is not a View-Once media message.\n\n*Type found:* " + vType
         }, { quoted: msg });
     }
 }
