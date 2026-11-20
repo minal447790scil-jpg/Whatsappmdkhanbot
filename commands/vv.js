@@ -1,4 +1,4 @@
-const { downloadContentFromMessage, normalizeMessageContent } = require('@whiskeysockets/baileys');
+const { downloadContentFromMessage, extractMessageContent } = require('@whiskeysockets/baileys');
 
 async function vvCommand(sock, from, msg) {
 
@@ -12,12 +12,12 @@ async function vvCommand(sock, from, msg) {
         }, { quoted: msg });
     }
 
-    // View-Once wrapper ko kholne ke liye
+    // View-Once ka wrapper kholne ke liye
     const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage;
     const rawMessage = viewOnce ? viewOnce.message : quoted;
     
-    // normalizeMessageContent se andar ka asal media message nikalta hai
-    const message = normalizeMessageContent(rawMessage) || rawMessage;
+    // Asal media message nikalne ke liye
+    const message = extractMessageContent(rawMessage) || rawMessage;
     
     const vType = Object.keys(message)[0];
 
