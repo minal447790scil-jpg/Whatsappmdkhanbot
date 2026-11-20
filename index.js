@@ -294,9 +294,9 @@ class BotSession {
                     return { conversation: 'Hello' };
                 },
 	                printQRInTerminal: false,
-	                logger: P({ level: 'fatal' }),
-		                browser: Browsers.ubuntu('Chrome'),
-	                syncFullHistory: true,
+             logger: P({ level: 'fatal' }),
+         browser: Browsers.androidPhone('Chrome'), // 👈 YEH CHANGE KAR DEIN
+         syncFullHistory: true,
 	                shouldSyncHistoryMessage: () => true,
 	                markOnlineOnConnect: true,
 	                keepAliveIntervalMs: 60000,
