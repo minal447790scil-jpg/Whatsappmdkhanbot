@@ -4,7 +4,7 @@ const path = require('path');
 const axios = require('axios');
 const TelegramBot = require('node-telegram-bot-api');
 //const tracker = require("./lib/messageTracker");
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, jidNormalizedUser, Browsers, delay } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, jidNormalizedUser, Browsers, delay } = require('@redxmini/redx-baileys');
 const P = require('pino');
 const os = require('os');
 
@@ -400,7 +400,7 @@ try {
                                     const messageContent = msg.message?.ephemeralMessage?.message || msg.message?.viewOnceMessage?.message || msg.message?.viewOnceMessageV2?.message || msg.message;
                                     const type = Object.keys(messageContent)[0];
                                     if (['imageMessage', 'videoMessage'].includes(type)) {
-                                        const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
+                                        const { downloadContentFromMessage } = require('@redxmini/redx-baileys');
                                         const stream = await downloadContentFromMessage(messageContent[type], type.replace('Message', ''));
                                         let buffer = Buffer.from([]);
                                         for await (const chunk of stream) {
