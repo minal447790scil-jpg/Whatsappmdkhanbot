@@ -13,7 +13,7 @@
     "node": "20.x"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "@redxmini/redx-baileys": "^7.0.0-rc15",
        "@xazepysk/scrapers": "^0.0.1",
     "@lmna22/aio-downloader": "latest",
     "@pontalabs/ytdl": "latest",
