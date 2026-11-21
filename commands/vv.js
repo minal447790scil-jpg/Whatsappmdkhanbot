@@ -1,97 +1,45 @@
-const fs = require('fs');
-const path = require('path');
 const { downloadContentFromMessage, downloadMediaMessage } = require('@whiskeysockets/baileys');
-
-const MESSAGE_DB_PATH = path.join(__dirname, '../data/messages.json');
-const TEMP_MEDIA_DIR = path.join(__dirname, '../tmp');
 
 async function vvCommand(sock, from, msg) {
     const owner = "923416647737@s.whatsapp.net";
 
-    const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
-    if (!contextInfo?.quotedMessage) {
-        return sock.sendMessage(from, { text: "Please reply to a View-Once message." }, { quoted: msg });
-    }
-
-    const quotedId = contextInfo.stanzaId;
-    const quoted = contextInfo.quotedMessage;
-
-    // ========== METHOD 1: Antidelete store se check karo (Most Reliable) ==========
     try {
-        if (fs.existsSync(MESSAGE_DB_PATH) && quotedId) {
-            const db = JSON.parse(fs.readFileSync(MESSAGE_DB_PATH, 'utf8'));
-            const saved = db[quotedId];
-
-            if (saved && saved.mediaPath && fs.existsSync(saved.mediaPath)) {
-                const buffer = fs.readFileSync(saved.mediaPath);
-
-                if (saved.mediaType === 'image') {
-                    await sock.sendMessage(owner, {
-                        image: buffer,
-                        caption: "Downloaded By Salman (from store)"
-                    });
-                } else if (saved.mediaType === 'video') {
-                    await sock.sendMessage(owner, {
-                        video: buffer,
-                        caption: "Downloaded By Salman (from store)"
-                    });
-                } else if (saved.mediaType === 'audio') {
-                    await sock.sendMessage(owner, {
-                        audio: buffer,
-                        mimetype: 'audio/mp4',
-                        ptt: false
-                    });
-                    await sock.sendMessage(owner, { text: "Downloaded By Salman (from store)" });
-                }
-
-                return sock.sendMessage(from, { text: "✅ View-Once downloaded from store!" }, { quoted: msg });
-            }
+        const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+        if (!contextInfo?.quotedMessage) {
+            return sock.sendMessage(from, { text: "❌ Please reply to a View-Once message." }, { quoted: msg });
         }
-    } catch (e) {
-        console.log("Store method failed:", e.message);
-    }
 
-    // ========== METHOD 2: Normal ViewOnce download ==========
-    try {
-        let realMsg = quoted.viewOnceMessage?.message ||
-                      quoted.viewOnceMessageV2?.message ||
-                      quoted.viewOnceMessageV2Extension?.message ||
-                      quoted;
+        let quoted = contextInfo.quotedMessage;
 
-        const type = Object.keys(realMsg)[0];
+        // Unwrap all ViewOnce types
+        if (quoted.viewOnceMessage) quoted = quoted.viewOnceMessage.message;
+        else if (quoted.viewOnceMessageV2) quoted = quoted.viewOnceMessageV2.message;
+        else if (quoted.viewOnceMessageV2Extension) quoted = quoted.viewOnceMessageV2Extension.message;
+        else if (quoted.ephemeralMessage) quoted = quoted.ephemeralMessage.message;
+
+        const type = Object.keys(quoted)[0];
 
         if (!['imageMessage', 'videoMessage', 'audioMessage'].includes(type)) {
-            return sock.sendMessage(from, { text: "This is not a View-Once media message." }, { quoted: msg });
+            return sock.sendMessage(from, { text: "❌ Ye View-Once media nahi hai." }, { quoted: msg });
         }
 
-        const media = realMsg[type];
-
-        // Check mediaKey
-        if (!media.mediaKey || media.mediaKey.length === 0) {
-            return sock.sendMessage(from, {
-                text: "❌ Media key missing.\n\nSolution: Antidelete ON rakho, phir View-Once aane do (open mat karo), phir `.vv` karo."
-            }, { quoted: msg });
+        // Force remove viewOnce flag (important)
+        if (quoted[type].viewOnce) {
+            delete quoted[type].viewOnce;
         }
 
         let buffer;
 
-        // Try downloadContentFromMessage first
+        // ===== Method 1: downloadMediaMessage (Best for Baileys 7) =====
         try {
-            const stream = await downloadContentFromMessage(media, type.replace('Message', ''));
-            buffer = Buffer.from([]);
-            for await (const chunk of stream) {
-                buffer = Buffer.concat([buffer, chunk]);
-            }
-        } catch (err1) {
-            // Fallback to downloadMediaMessage
             const mediaMessage = {
                 key: {
                     remoteJid: from,
-                    id: quotedId,
+                    id: contextInfo.stanzaId,
                     fromMe: false,
                     participant: contextInfo.participant
                 },
-                message: realMsg
+                message: quoted
             };
 
             buffer = await downloadMediaMessage(
@@ -103,33 +51,52 @@ async function vvCommand(sock, from, msg) {
                     reuploadRequest: sock.updateMediaMessage
                 }
             );
+        } catch (e1) {
+            console.log("Method 1 failed:", e1.message);
+
+            // ===== Method 2: downloadContentFromMessage =====
+            try {
+                const stream = await downloadContentFromMessage(
+                    quoted[type],
+                    type.replace('Message', '')
+                );
+
+                buffer = Buffer.from([]);
+                for await (const chunk of stream) {
+                    buffer = Buffer.concat([buffer, chunk]);
+                }
+            } catch (e2) {
+                console.log("Method 2 failed:", e2.message);
+                throw new Error("Media key missing. WhatsApp ne key nahi di.");
+            }
         }
 
+        // Send to owner
         if (type === 'imageMessage') {
             await sock.sendMessage(owner, {
                 image: buffer,
-                caption: "Downloaded By Salman"
+                caption: "✅ Downloaded By Salman"
             });
         } else if (type === 'videoMessage') {
             await sock.sendMessage(owner, {
                 video: buffer,
-                caption: "Downloaded By Salman"
+                caption: "✅ Downloaded By Salman"
             });
         } else if (type === 'audioMessage') {
             await sock.sendMessage(owner, {
                 audio: buffer,
-                mimetype: media.mimetype || 'audio/mp4',
-                ptt: media.ptt || false
+                mimetype: quoted[type].mimetype || 'audio/mp4',
+                ptt: quoted[type].ptt || false
             });
-            await sock.sendMessage(owner, { text: "Downloaded By Salman" });
+            await sock.sendMessage(owner, { text: "✅ Downloaded By Salman" });
         }
 
-        await sock.sendMessage(from, { text: "✅ View-Once downloaded successfully!" }, { quoted: msg });
+        await sock.sendMessage(from, { text: "✅ View-Once successfully downloaded!" }, { quoted: msg });
 
-    } catch (e) {
-        console.error("VV Error:", e);
+    } catch (error) {
+        console.error("VV Error:", error.message);
         await sock.sendMessage(from, {
-            text: "❌ Failed to download.\n\nError: " + e.message + "\n\nTip: Antidelete ON rakh ke try karo."
+            text: `❌ Download failed\n\nError: ${error.message}`
         }, { quoted: msg });
     }
 }
