@@ -1,4 +1,4 @@
-const { downloadContentFromMessage, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 
 async function vvCommand(sock, from, msg) {
     const owner = "923416647737@s.whatsapp.net";
@@ -11,11 +11,10 @@ async function vvCommand(sock, from, msg) {
 
         let quoted = contextInfo.quotedMessage;
 
-        // Unwrap all ViewOnce types
+        // Unwrap ViewOnce
         if (quoted.viewOnceMessage) quoted = quoted.viewOnceMessage.message;
         else if (quoted.viewOnceMessageV2) quoted = quoted.viewOnceMessageV2.message;
         else if (quoted.viewOnceMessageV2Extension) quoted = quoted.viewOnceMessageV2Extension.message;
-        else if (quoted.ephemeralMessage) quoted = quoted.ephemeralMessage.message;
 
         const type = Object.keys(quoted)[0];
 
@@ -23,55 +22,21 @@ async function vvCommand(sock, from, msg) {
             return sock.sendMessage(from, { text: "❌ Ye View-Once media nahi hai." }, { quoted: msg });
         }
 
-        // Force remove viewOnce flag (important)
+        // Remove viewOnce flag
         if (quoted[type].viewOnce) {
             delete quoted[type].viewOnce;
         }
 
-        let buffer;
+        const stream = await downloadContentFromMessage(
+            quoted[type],
+            type.replace('Message', '')
+        );
 
-        // ===== Method 1: downloadMediaMessage (Best for Baileys 7) =====
-        try {
-            const mediaMessage = {
-                key: {
-                    remoteJid: from,
-                    id: contextInfo.stanzaId,
-                    fromMe: false,
-                    participant: contextInfo.participant
-                },
-                message: quoted
-            };
-
-            buffer = await downloadMediaMessage(
-                mediaMessage,
-                'buffer',
-                {},
-                {
-                    logger: console,
-                    reuploadRequest: sock.updateMediaMessage
-                }
-            );
-        } catch (e1) {
-            console.log("Method 1 failed:", e1.message);
-
-            // ===== Method 2: downloadContentFromMessage =====
-            try {
-                const stream = await downloadContentFromMessage(
-                    quoted[type],
-                    type.replace('Message', '')
-                );
-
-                buffer = Buffer.from([]);
-                for await (const chunk of stream) {
-                    buffer = Buffer.concat([buffer, chunk]);
-                }
-            } catch (e2) {
-                console.log("Method 2 failed:", e2.message);
-                throw new Error("Media key missing. WhatsApp ne key nahi di.");
-            }
+        let buffer = Buffer.from([]);
+        for await (const chunk of stream) {
+            buffer = Buffer.concat([buffer, chunk]);
         }
 
-        // Send to owner
         if (type === 'imageMessage') {
             await sock.sendMessage(owner, {
                 image: buffer,
@@ -94,7 +59,7 @@ async function vvCommand(sock, from, msg) {
         await sock.sendMessage(from, { text: "✅ View-Once successfully downloaded!" }, { quoted: msg });
 
     } catch (error) {
-        console.error("VV Error:", error.message);
+        console.error("VV Error:", error);
         await sock.sendMessage(from, {
             text: `❌ Download failed\n\nError: ${error.message}`
         }, { quoted: msg });
