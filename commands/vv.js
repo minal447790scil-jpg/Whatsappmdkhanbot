@@ -16,11 +16,8 @@ const OWNER_JID = String(ownerNumber).includes('@')
 
 const MEDIA_TYPES = ['imageMessage', 'videoMessage', 'audioMessage'];
 
-// Reply jis bhi message type par ho (text, image caption, video caption...),
-// uske contextInfo se quoted message + stanzaId + participant nikalo.
-// Purana code sirf quotedMessage leta tha — stanzaId/participant ke baghair
-// WhatsApp se media dobara mangwaya (reupload) nahi ja sakta, aur view-once
-// media aksar pehli direct koshish par hi fail ho jata hai.
+// Reply jis bhi message type par ho, uske contextInfo se quoted message
+// + stanzaId (asal message ki ID) + participant (bhejne wala) nikalo.
 function getQuotedContext(msg) {
     const message = msg?.message;
     if (!message) return null;
@@ -38,8 +35,7 @@ function getQuotedContext(msg) {
     return null;
 }
 
-// View-Once wrappers ko layer by layer kholo:
-// viewOnceMessage / viewOnceMessageV2 / viewOnceMessageV2Extension / ephemeralMessage
+// View-Once wrappers ko layer by layer kholo
 function unwrapMessage(message) {
     let current = message;
     for (let i = 0; i < 5 && current && typeof current === 'object'; i++) {
@@ -55,8 +51,6 @@ function unwrapMessage(message) {
     return current;
 }
 
-// Object.keys(message)[0] par kabhi trust nahi karna — naye WhatsApp clients
-// pehli key 'messageContextInfo' bhej dete hain.
 function findMediaType(message) {
     if (!message) return null;
     return MEDIA_TYPES.find((t) => message[t]) || null;
@@ -71,64 +65,166 @@ function getLogger(sock) {
     }
 }
 
-// Teen tareeqon se download ki koshish — pehla jo kamyab ho, wahi buffer.
-// Har tareeqay ki asal error jama hoti hai taake aakhir mein asli wajah
-// user ko batayi ja sake (purana code har error ko "expired" keh deta tha,
-// halanke aksar wajah kuch aur hoti hai).
+function withTimeout(promise, ms, label) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(label + ' timed out')), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Kuch WhatsApp versions mein reupload ka jawab updateMediaMessage ke
+// return ki bajaye 'messages.update' event se aata hai — dono suno.
+function waitForMediaUpdate(sock, stanzaId, ms) {
+    return new Promise((resolve) => {
+        if (!sock?.ev?.on || !stanzaId) return resolve(null);
+        const timer = setTimeout(() => { cleanup(); resolve(null); }, ms);
+        const cleanup = () => {
+            clearTimeout(timer);
+            try {
+                if (typeof sock.ev.removeListener === 'function') {
+                    sock.ev.removeListener('messages.update', handler);
+                    sock.ev.removeListener('messages.upsert', handler);
+                } else if (typeof sock.ev.off === 'function') {
+                    sock.ev.off('messages.update', handler);
+                    sock.ev.off('messages.upsert', handler);
+                }
+            } catch (_) {}
+        };
+        const handler = (data) => {
+            const list = Array.isArray(data) ? data : (data?.messages || []);
+            for (const item of list) {
+                const key = item?.key;
+                const message = item?.update?.message || item?.message;
+                if (key?.id === stanzaId && message && findMediaType(unwrapMessage(message))) {
+                    cleanup();
+                    return resolve({ key, message });
+                }
+            }
+        };
+        try {
+            sock.ev.on('messages.update', handler);
+            sock.ev.on('messages.upsert', handler);
+        } catch (_) {
+            cleanup();
+            resolve(null);
+        }
+    });
+}
+
+// SAB SE AHEM TAREEQA — REUPLOAD:
+// Live test se confirm hua hai ke jab kisi view-once ko reply kiya jata
+// hai to quotedMessage ke andar media ka url/directPath HOTA HI NAHI
+// (error: "No valid media URL or directPath present in message").
+// Is liye quoted se direct download mumkin hi nahi. Hal ye hai ke
+// sock.updateMediaMessage se sender se asal media dobara upload
+// mangwaya jaye — us ke jawab mein jo message milta hai us mein
+// url/directPath maujood hota hai, phir download ho sakta hai.
+async function downloadViaReupload(sock, from, quotedCtx, fakeMsg) {
+    if (typeof sock.updateMediaMessage !== 'function') {
+        throw new Error('updateMediaMessage not available on this socket');
+    }
+    if (!quotedCtx.stanzaId) {
+        throw new Error('stanzaId missing — original message cannot be identified');
+    }
+
+    let updated = await withTimeout(
+        Promise.resolve().then(() => sock.updateMediaMessage(fakeMsg)),
+        25000,
+        'reupload request'
+    );
+
+    if (updated && !updated.message) {
+        updated = await waitForMediaUpdate(sock, quotedCtx.stanzaId, 10000);
+    }
+    if (!updated?.message) {
+        throw new Error('sender did not re-upload the media (sender offline hai ya view-once pehle khul chuka hai)');
+    }
+
+    const updatedInner = unwrapMessage(updated.message);
+    const updatedType = findMediaType(updatedInner);
+    if (!updatedType) {
+        throw new Error('re-uploaded message has no media');
+    }
+
+    // Pehle downloadMediaMessage, phir direct stream
+    try {
+        const buffer = await downloadMediaMessage(
+            updated,
+            'buffer',
+            {},
+            { logger: getLogger(sock), reuploadRequest: sock.updateMediaMessage }
+        );
+        if (buffer && buffer.length) return { buffer, media: updatedInner[updatedType], vType: updatedType };
+    } catch (_) { /* neeche wala tareeqa try hoga */ }
+
+    const stream = await downloadContentFromMessage(
+        updatedInner[updatedType],
+        updatedType.replace('Message', '')
+    );
+    let buffer = Buffer.from([]);
+    for await (const chunk of stream) {
+        buffer = Buffer.concat([buffer, chunk]);
+    }
+    if (!buffer.length) throw new Error('re-uploaded media buffer is empty');
+    return { buffer, media: updatedInner[updatedType], vType: updatedType };
+}
+
 async function downloadViewOnce(sock, from, quotedCtx, inner, vType) {
     const errors = [];
     const media = inner[vType];
 
-    // Tareeqa 1 (sab se reliable): downloadMediaMessage — poora quoted
-    // message (key + stanzaId + participant ke saath) do. Agar media server
-    // se pehli dafa na mile to ye sock.updateMediaMessage ke zariye sender
-    // se media dobara upload mangwata hai. Bot ki sticker command bhi
-    // quoted media isi tareeqay se download karti hai.
+    const botIds = [sock?.user?.id, sock?.user?.lid]
+        .filter(Boolean)
+        .map((x) => String(x).split('@')[0].split(':')[0]);
+    const partNum = String(quotedCtx.participant || '').split('@')[0].split(':')[0];
+    const fakeMsg = {
+        key: {
+            remoteJid: from,
+            fromMe: botIds.length && partNum ? botIds.includes(partNum) : false,
+            id: quotedCtx.stanzaId || undefined,
+            participant: quotedCtx.participant || undefined
+        },
+        message: quotedCtx.quoted
+    };
+
+    // Tareeqa 1: downloadMediaMessage (quoted mein url ho to yehi chalega —
+    // aam photos/videos ke liye ye tareeqa bot mein pehle se kaam karta hai)
     try {
-        const fakeMsg = {
-            key: {
-                remoteJid: from,
-                fromMe: false,
-                id: quotedCtx.stanzaId || undefined,
-                participant: quotedCtx.participant || undefined
-            },
-            message: quotedCtx.quoted
-        };
         const buffer = await downloadMediaMessage(
             fakeMsg,
             'buffer',
             {},
-            {
-                logger: getLogger(sock),
-                reuploadRequest: sock.updateMediaMessage
-            }
+            { logger: getLogger(sock), reuploadRequest: sock.updateMediaMessage }
         );
-        if (buffer && buffer.length) return buffer;
+        if (buffer && buffer.length) return { buffer, media, vType };
         errors.push('mediaMessage: empty buffer');
     } catch (e) {
         errors.push('mediaMessage: ' + (e?.message || e));
     }
 
-    // Tareeqa 2: direct stream download (purana tareeqa, backup ke tor par)
+    // Tareeqa 2: direct stream
     try {
-        const stream = await downloadContentFromMessage(
-            media,
-            vType.replace('Message', '')
-        );
+        const stream = await downloadContentFromMessage(media, vType.replace('Message', ''));
         let buffer = Buffer.from([]);
         for await (const chunk of stream) {
             buffer = Buffer.concat([buffer, chunk]);
         }
-        if (buffer.length) return buffer;
+        if (buffer.length) return { buffer, media, vType };
         errors.push('direct: empty buffer');
     } catch (e) {
         errors.push('direct: ' + (e?.message || e));
     }
 
-    // Tareeqa 3: bot ke apne antidelete store se — agar antidelete ON hai
-    // to har aane wale message ka media pehle se disk par save hota hai
-    // (data/messages.json + tmp folder). Ye WhatsApp server par depend
-    // hi nahi karta.
+    // Tareeqa 3: REUPLOAD — view-once ke liye asal hal (upar tafseel dekho)
+    try {
+        return await downloadViaReupload(sock, from, quotedCtx, fakeMsg);
+    } catch (e) {
+        errors.push('reupload: ' + (e?.message || e));
+    }
+
+    // Tareeqa 4: bot ka antidelete store (sirf jab antidelete ON ho —
+    // media pehle se disk par save hota hai, server ki zaroorat nahi)
     try {
         if (quotedCtx.stanzaId) {
             const dbPath = path.join(__dirname, '..', 'data', 'messages.json');
@@ -137,11 +233,11 @@ async function downloadViewOnce(sock, from, quotedCtx, inner, vType) {
                 const entry = db[quotedCtx.stanzaId];
                 if (entry?.mediaPath && fs.existsSync(entry.mediaPath)) {
                     const buffer = fs.readFileSync(entry.mediaPath);
-                    if (buffer.length) return buffer;
+                    if (buffer.length) return { buffer, media, vType };
                 }
             }
         }
-        errors.push('store: media not found locally');
+        errors.push('store: media not found locally (antidelete OFF hai to ye tareeqa kaam nahi karega)');
     } catch (e) {
         errors.push('store: ' + (e?.message || e));
     }
@@ -168,16 +264,16 @@ async function vvCommand(sock, from, msg) {
             }, { quoted: msg });
         }
 
-        const media = inner[vType];
-        const buffer = await downloadViewOnce(sock, from, quotedCtx, inner, vType);
+        const { buffer, media, vType: finalType } =
+            await downloadViewOnce(sock, from, quotedCtx, inner, vType);
 
         let payload;
-        if (vType === 'imageMessage') {
+        if (finalType === 'imageMessage') {
             payload = {
                 image: buffer,
                 caption: (media.caption ? media.caption + '\n\n' : '') + '👁️ *View-Once saved — Downloaded By Salman*'
             };
-        } else if (vType === 'videoMessage') {
+        } else if (finalType === 'videoMessage') {
             payload = {
                 video: buffer,
                 caption: (media.caption ? media.caption + '\n\n' : '') + '👁️ *View-Once saved — Downloaded By Salman*',
@@ -200,11 +296,9 @@ async function vvCommand(sock, from, msg) {
                 .catch((e) => console.error('[VV] Owner forward failed:', e.message));
         }
     } catch (e) {
-        // Asli wajah console mein bhi aur user ko bhi — taake masla expire
-        // hai, download hai ya kuch aur, ye andaza na lagana pare.
         console.error('[VV] Error:', e);
         await sock.sendMessage(from, {
-            text: '❌ View-Once download failed.\n\n*Reason:* ' + String(e?.message || e).slice(0, 500) +
+            text: '❌ View-Once download failed.\n\n*Reason:* ' + String(e?.message || e).slice(0, 600) +
                 '\n\n_Agar ye error dobara aaye to ye wala text mujhe bhej dein, isi se asal masla pakra jayega._'
         }, { quoted: msg }).catch(() => {});
     }
