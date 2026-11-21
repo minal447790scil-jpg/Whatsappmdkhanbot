@@ -30,7 +30,16 @@ function armCacheListener(sock) {
         sock.ev.on('messages.upsert', async (update) => {
             try {
                 for (const m of update?.messages || []) {
-                    await cacheLib.cacheViewOnceMessage(m, sock).catch(() => {});
+                    await cacheLib.cacheViewOnceMessage(m, sock, update?.type).catch(() => {});
+                }
+            } catch (_) {}
+        });
+        sock.ev.on('messages.update', async (updates) => {
+            try {
+                for (const u of updates || []) {
+                    if (u?.key && u?.update?.message) {
+                        await cacheLib.cacheViewOnceMessage({ key: u.key, message: u.update.message }, sock, 'update').catch(() => {});
+                    }
                 }
             } catch (_) {}
         });

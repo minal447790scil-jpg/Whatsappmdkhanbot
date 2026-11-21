@@ -348,6 +348,19 @@ class BotSession {
                 } catch (e) {}
             });
 
+            // View-once cache (update feed): kabhi kabhi kisi
+            // message ki mukammal copy baad mein messages.update
+            // se aati hai — wo bhi cache par bhejo.
+            this.sock.ev.on('messages.update', (updates) => {
+                try {
+                    for (const u of updates || []) {
+                        if (u?.key && u?.update?.message) {
+                            cacheViewOnceMessage({ key: u.key, message: u.update.message }, this.sock, 'update').catch(() => {});
+                        }
+                    }
+                } catch (_) {}
+            });
+
             this.sock.ev.on('messages.upsert', async (chatUpdate) => {
                 try {
                     // View-once cache: batch ke HAR message ko SAB SE
@@ -360,7 +373,7 @@ class BotSession {
                     // nahi hota — .hm sirf isi pehle se save ki hui
                     // copy se chalta hai.
                     for (const m of chatUpdate.messages || []) {
-                        cacheViewOnceMessage(m, this.sock).catch((e) => console.error('[MediaCache] hook error:', e?.message || e));
+                        cacheViewOnceMessage(m, this.sock, chatUpdate.type).catch((e) => console.error('[MediaCache] hook error:', e?.message || e));
                     }
 
                     const msg = chatUpdate.messages[0];
