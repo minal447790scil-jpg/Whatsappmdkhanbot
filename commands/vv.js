@@ -218,6 +218,24 @@ async function downloadViewOnce(sock, from, quotedCtx, inner, vType) {
                 return { buffer: cached.buffer, media: { ...media, ...cached.media }, vType: cached.vType || vType };
             }
         }
+        // v9 FALLBACK: exact ID miss ho jaye (purana view-once,
+        // pairing/restart ke darmiyan aaya hua, ya ID ka farq)
+        // to usi chat ki sab se recent saved copy bhej do —
+        // user ka maqsad wahi media hasil karna hai. Caption
+        // mein note likha jayega taake user ko pata ho ye
+        // recent copy hai.
+        if (cacheLib?.getLatestCachedForChat) {
+            const latest = cacheLib.getLatestCachedForChat(from, vType);
+            if (latest?.buffer?.length && latest.id !== quotedCtx.stanzaId) {
+                const mins = Math.max(1, Math.round((Date.now() - (latest.ts || Date.now())) / 60000));
+                return {
+                    buffer: latest.buffer,
+                    media: { ...media, ...latest.media },
+                    vType: latest.vType || vType,
+                    note: `⚠️ Reply wali copy exact nahi mili — ye is chat ki sab se recent saved copy hai jo ${mins} minute pehle bot ko mili thi.`
+                };
+            }
+        }
         const statusLine = getCacheStatus ? getCacheStatus() : 'cache lib load nahi hui — lib/viewonceCache.js missing hai';
         const libVer = cacheLib?.VERSION || 'purani lib (version nahi hai)';
         errors.push(`cache: is view-once ki copy nahi mili | lib=${libVer}, selfArm=${sock?.__vvCacheArmed ? 'ON' : 'OFF'} | Cache status: ` + statusLine);
@@ -316,22 +334,25 @@ async function vvCommand(sock, from, msg) {
             }, { quoted: msg });
         }
 
-        const { buffer, media, vType: finalType } =
+        const { buffer, media, vType: finalType, note } =
             await downloadViewOnce(sock, from, quotedCtx, inner, vType);
 
         let payload;
         if (finalType === 'imageMessage') {
             payload = {
                 image: buffer,
-                caption: (media.caption ? media.caption + '\n\n' : '') + '👁️ *View-Once saved — Downloaded By Salman*'
+                caption: (note ? note + '\n\n' : '') + (media.caption ? media.caption + '\n\n' : '') + '👁️ *View-Once saved — Downloaded By Salman*'
             };
         } else if (finalType === 'videoMessage') {
             payload = {
                 video: buffer,
-                caption: (media.caption ? media.caption + '\n\n' : '') + '👁️ *View-Once saved — Downloaded By Salman*',
+                caption: (note ? note + '\n\n' : '') + (media.caption ? media.caption + '\n\n' : '') + '👁️ *View-Once saved — Downloaded By Salman*',
                 gifPlayback: media.gifPlayback || false
             };
         } else {
+            if (note) {
+                await sock.sendMessage(from, { text: note }, { quoted: msg }).catch(() => {});
+            }
             payload = {
                 audio: buffer,
                 mimetype: media.mimetype || 'audio/mp4',
