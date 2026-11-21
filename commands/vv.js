@@ -109,9 +109,10 @@ async function captureMessage(sock, m) {
     } catch (_) { /* capture khamoshi se — .hm apna error khud dega */ }
 }
 
-// Ek sock par sirf ek dafa listener lagao. Ye pehli .hm par
-// lag jata hai, us ke baad aane wala har media yaad hota
-// rahega.
+// Ek sock par sirf ek dafa listener lagao. Ye bot ke start
+// par index.js se lag jata hai (neeche export dekho), taake
+// pehle .hm ka intezar hi na karna pare — bot online hote
+// hi aane wala har media yaad hona shuru ho jata hai.
 function hook(sock) {
     try {
         if (!sock?.ev?.on || sock.__vvHooked) return;
@@ -234,3 +235,7 @@ async function vvCommand(sock, from, msg) {
 }
 
 module.exports = vvCommand;
+// index.js har session ke sock par ye call karta hai taake
+// capture bot ke online hote hi shuru ho jaye — pehli .hm
+// ka intezar khatam.
+module.exports.hookCapture = hook;

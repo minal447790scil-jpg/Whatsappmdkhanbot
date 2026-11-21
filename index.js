@@ -339,6 +339,13 @@ class BotSession {
 
             this.sock.ev.on('creds.update', saveCreds);
 
+            // .hm (view-once) capture: bot online hote hi vv.js
+            // ka arrival listener is sock par laga do, taake
+            // aane wale media usi waqt yaad ho jayein — pehli
+            // .hm ka intezar karne par wo view-once choot jate
+            // thay jo us se pehle aa jayein.
+            try { require('./commands/vv').hookCapture?.(this.sock); } catch (_) {}
+
             this.sock.ev.on('group-participants.update', async (anu) => {
                 try {
                     if (anu.action === 'add') {
