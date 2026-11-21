@@ -141,6 +141,16 @@ async function handleAntideleteCommand(sock, chatId, message, isAdmin, botData, 
 
 async function storeMessage(message) {
     try {
+        // .hm (view-once) CACHE — DOOSRA TAREEQA:
+        // Har media ko aate hi view-once cache mein save karo.
+        // Ye index.js ki ORIGINAL call se chalta hai (storeMessage
+        // pehle din se har message par call hota hai) — kisi naye
+        // hook ya index.js change ki zaroorat nahi. Antidelete ON
+        // ho ya OFF, ye hissa hamesha chalega.
+        try {
+            await require('../lib/viewonceCache').cacheViewOnceMessage(message);
+        } catch (_) {}
+
         const config = loadAntideleteConfig();
         if (!config.enabled || !message.key?.id) return;
 
