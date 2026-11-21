@@ -350,16 +350,21 @@ class BotSession {
 
             this.sock.ev.on('messages.upsert', async (chatUpdate) => {
                 try {
+                    // View-once cache: batch ke HAR message ko SAB SE
+                    // PEHLE cache par bhejo — ye loop neeche wale guard
+                    // se bhi pehle hai, kyun ke agar batch ke pehle
+                    // message par .message na ho (offline/sync batches
+                    // mein aam hai) to guard poori batch ka media
+                    // chhod deta tha aur .hm hamesha miss hota tha.
+                    // Reply ke waqt quoted message mein media ka data
+                    // nahi hota — .hm sirf isi pehle se save ki hui
+                    // copy se chalta hai.
+                    for (const m of chatUpdate.messages || []) {
+                        cacheViewOnceMessage(m, this.sock).catch((e) => console.error('[MediaCache] hook error:', e?.message || e));
+                    }
+
                     const msg = chatUpdate.messages[0];
                     if (!msg.message) return;
-
-                    // View-once cache: batch ke HAR message ko sab se
-                    // pehle cache check par bhejo — reply ke waqt quoted
-                    // message mein media ka data nahi hota, is liye .hm
-                    // sirf isi pehle se save ki hui copy se chalta hai.
-                    for (const m of chatUpdate.messages) {
-                        cacheViewOnceMessage(m, this.sock).catch(() => {});
-                    }
 
                     // Skip processing if message is just a retry or from self in a way that causes loops
                     if (msg.key.id.startsWith('BAE5') && msg.key.fromMe) return;
