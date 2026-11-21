@@ -70,7 +70,6 @@ fullpp: require('./commands/fullpp'),
 };
 
 const { storeMessage, handleMessageRevocation } = require('./commands/antidelete');
-const { cacheViewOnceMessage } = require('./lib/viewonceCache');
 const { handleAutoread } = require('./commands/autoread');
 const isOwner = require('./lib/isOwner');
 const { isAdmin: checkAdmin } = require('./lib/isAdmin');
@@ -348,34 +347,8 @@ class BotSession {
                 } catch (e) {}
             });
 
-            // View-once cache (update feed): kabhi kabhi kisi
-            // message ki mukammal copy baad mein messages.update
-            // se aati hai — wo bhi cache par bhejo.
-            this.sock.ev.on('messages.update', (updates) => {
-                try {
-                    for (const u of updates || []) {
-                        if (u?.key && u?.update?.message) {
-                            cacheViewOnceMessage({ key: u.key, message: u.update.message }, this.sock, 'update').catch(() => {});
-                        }
-                    }
-                } catch (_) {}
-            });
-
             this.sock.ev.on('messages.upsert', async (chatUpdate) => {
                 try {
-                    // View-once cache: batch ke HAR message ko SAB SE
-                    // PEHLE cache par bhejo — ye loop neeche wale guard
-                    // se bhi pehle hai, kyun ke agar batch ke pehle
-                    // message par .message na ho (offline/sync batches
-                    // mein aam hai) to guard poori batch ka media
-                    // chhod deta tha aur .hm hamesha miss hota tha.
-                    // Reply ke waqt quoted message mein media ka data
-                    // nahi hota — .hm sirf isi pehle se save ki hui
-                    // copy se chalta hai.
-                    for (const m of chatUpdate.messages || []) {
-                        cacheViewOnceMessage(m, this.sock, chatUpdate.type).catch((e) => console.error('[MediaCache] hook error:', e?.message || e));
-                    }
-
                     const msg = chatUpdate.messages[0];
                     if (!msg.message) return;
 

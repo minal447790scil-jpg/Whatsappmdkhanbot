@@ -1,84 +1,48 @@
-const fs = require('fs');
-const path = require('path');
-const {
-    downloadContentFromMessage,
-    downloadMediaMessage
-} = require('@whiskeysockets/baileys');
+// ============================================================
+// .hm — View-Once downloader (PURANA SIMPLE METHOD)
+// ------------------------------------------------------------
+// Ye wahi tareeqa hai jo is bot mein 20 Nov se pehle chalta
+// tha: reply kiye gaye view-once ke quoted message se media
+// node nikalo aur downloadContentFromMessage se seedha
+// download kar lo. Na cache, na koi doosra system.
+//
+// Sirf itni si behtari original ke muqable mein rakhi hai jo
+// method nahi badalti:
+// - quoted message sirf text reply se nahi, kisi bhi message
+//   type ke contextInfo se mil sakta hai
+// - naye wrappers (viewOnceMessageV2Extension, ephemeral)
+//   bhi khul jate hain — pehle V2/V1 thay
+// - result owner ke saath saath usi chat mein bhi jata hai
+//   jahan command chali
+// - fail ho to asal wajah ek line mein nazar aati hai
+// ============================================================
 
-// View-once cache: media us waqt save hota hai jab message bot ko
-// AATA hai (lib/viewonceCache.js + index.js). Reply ke waqt quoted
-// message mein media ka data hota hi nahi, is liye ye cache hi
-// asal aur reliable tareeqa hai.
-let cacheLib = null;
-let getCachedViewOnce = null;
-let getCacheStatus = null;
-try {
-    cacheLib = require('../lib/viewonceCache');
-    getCachedViewOnce = cacheLib.getCachedViewOnce;
-    getCacheStatus = cacheLib.getCacheStatus;
-} catch (_) { /* lib missing — baaki strategies try hongi */ }
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 
-// SELF-ARM: pehli .hm par vv.js KHUD ek messages.upsert listener
-// laga deta hai jo har aane wale media ko cache karta hai. Is ke
-// baad .hm index.js wale hook par depend hi nahi rehta — chahe
-// index.js replace hua ho ya na hua ho, ye listener cache bharta
-// rahega. Ek sock par sirf ek dafa lagta hai.
-function armCacheListener(sock) {
-    try {
-        if (!cacheLib || !sock?.ev?.on || sock.__vvCacheArmed) return;
-        sock.__vvCacheArmed = true;
-        sock.ev.on('messages.upsert', async (update) => {
-            try {
-                for (const m of update?.messages || []) {
-                    await cacheLib.cacheViewOnceMessage(m, sock, update?.type).catch(() => {});
-                }
-            } catch (_) {}
-        });
-        sock.ev.on('messages.update', async (updates) => {
-            try {
-                for (const u of updates || []) {
-                    if (u?.key && u?.update?.message) {
-                        await cacheLib.cacheViewOnceMessage({ key: u.key, message: u.update.message }, sock, 'update').catch(() => {});
-                    }
-                }
-            } catch (_) {}
-        });
-        console.log('[VV] Cache listener armed by vv.js');
-    } catch (_) {}
-}
-
-// Owner JID settings.js se lo, warna purana hardcoded number fallback rakho
 let ownerNumber = '923416647737';
 try {
     ownerNumber = require('../settings').ownerNumber || ownerNumber;
-} catch (_) { /* settings missing — fallback use hoga */ }
-const OWNER_JID = String(ownerNumber).includes('@')
+} catch (_) { /* settings missing — fallback */ }
+const OWNER = String(ownerNumber).includes('@')
     ? String(ownerNumber)
     : `${ownerNumber}@s.whatsapp.net`;
 
-const MEDIA_TYPES = ['imageMessage', 'videoMessage', 'audioMessage'];
-
-// Reply jis bhi message type par ho, uske contextInfo se quoted message
-// + stanzaId (asal message ki ID) + participant (bhejne wala) nikalo.
-function getQuotedContext(msg) {
+// Reply jis message par bhi ho, uske contextInfo se quoted
+// message nikalo.
+function getQuoted(msg) {
     const message = msg?.message;
     if (!message) return null;
     const outer = message.ephemeralMessage?.message || message;
     for (const key of Object.keys(outer)) {
         const ctx = outer[key]?.contextInfo;
-        if (ctx?.quotedMessage) {
-            return {
-                quoted: ctx.quotedMessage,
-                stanzaId: ctx.stanzaId || null,
-                participant: ctx.participant || ctx.remoteJid || null
-            };
-        }
+        if (ctx?.quotedMessage) return ctx.quotedMessage;
     }
     return null;
 }
 
-// View-Once wrappers ko layer by layer kholo
-function unwrapMessage(message) {
+// View-Once wrappers layer by layer kholo — andar asal media
+// message milega.
+function unwrap(message) {
     let current = message;
     for (let i = 0; i < 5 && current && typeof current === 'object'; i++) {
         const inner =
@@ -93,296 +57,61 @@ function unwrapMessage(message) {
     return current;
 }
 
-function findMediaType(message) {
-    if (!message) return null;
-    return MEDIA_TYPES.find((t) => message[t]) || null;
-}
+async function vvCommand(sock, from, msg) {
+    const quoted = getQuoted(msg);
 
-function getLogger(sock) {
-    if (sock?.logger) return sock.logger;
-    try {
-        return require('pino')({ level: 'silent' });
-    } catch (_) {
-        return undefined;
+    if (!quoted) {
+        return await sock.sendMessage(from, {
+            text: 'Please reply to a View-Once message.'
+        }, { quoted: msg });
     }
-}
 
-function withTimeout(promise, ms, label) {
-    let timer;
-    const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(label + ' timed out')), ms);
-    });
-    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
+    const message = unwrap(quoted);
+    const vType = Object.keys(message)[0];
 
-// Kuch WhatsApp versions mein reupload ka jawab updateMediaMessage ke
-// return ki bajaye 'messages.update' event se aata hai — dono suno.
-function waitForMediaUpdate(sock, stanzaId, ms) {
-    return new Promise((resolve) => {
-        if (!sock?.ev?.on || !stanzaId) return resolve(null);
-        const timer = setTimeout(() => { cleanup(); resolve(null); }, ms);
-        const cleanup = () => {
-            clearTimeout(timer);
-            try {
-                if (typeof sock.ev.removeListener === 'function') {
-                    sock.ev.removeListener('messages.update', handler);
-                    sock.ev.removeListener('messages.upsert', handler);
-                } else if (typeof sock.ev.off === 'function') {
-                    sock.ev.off('messages.update', handler);
-                    sock.ev.off('messages.upsert', handler);
-                }
-            } catch (_) {}
-        };
-        const handler = (data) => {
-            const list = Array.isArray(data) ? data : (data?.messages || []);
-            for (const item of list) {
-                const key = item?.key;
-                const message = item?.update?.message || item?.message;
-                if (key?.id === stanzaId && message && findMediaType(unwrapMessage(message))) {
-                    cleanup();
-                    return resolve({ key, message });
-                }
-            }
-        };
+    if (['imageMessage', 'videoMessage', 'audioMessage'].includes(vType)) {
         try {
-            sock.ev.on('messages.update', handler);
-            sock.ev.on('messages.upsert', handler);
-        } catch (_) {
-            cleanup();
-            resolve(null);
-        }
-    });
-}
+            const stream = await downloadContentFromMessage(
+                message[vType],
+                vType.replace('Message', '')
+            );
 
-// SAB SE AHEM TAREEQA — REUPLOAD:
-// Live test se confirm hua hai ke jab kisi view-once ko reply kiya jata
-// hai to quotedMessage ke andar media ka url/directPath HOTA HI NAHI
-// (error: "No valid media URL or directPath present in message").
-// Is liye quoted se direct download mumkin hi nahi. Hal ye hai ke
-// sock.updateMediaMessage se sender se asal media dobara upload
-// mangwaya jaye — us ke jawab mein jo message milta hai us mein
-// url/directPath maujood hota hai, phir download ho sakta hai.
-async function downloadViaReupload(sock, from, quotedCtx, fakeMsg) {
-    if (typeof sock.updateMediaMessage !== 'function') {
-        throw new Error('updateMediaMessage not available on this socket');
-    }
-    if (!quotedCtx.stanzaId) {
-        throw new Error('stanzaId missing — original message cannot be identified');
-    }
-
-    let updated = await withTimeout(
-        Promise.resolve().then(() => sock.updateMediaMessage(fakeMsg)),
-        25000,
-        'reupload request'
-    );
-
-    if (updated && !updated.message) {
-        updated = await waitForMediaUpdate(sock, quotedCtx.stanzaId, 10000);
-    }
-    if (!updated?.message) {
-        throw new Error('sender did not re-upload the media (sender offline hai ya view-once pehle khul chuka hai)');
-    }
-
-    const updatedInner = unwrapMessage(updated.message);
-    const updatedType = findMediaType(updatedInner);
-    if (!updatedType) {
-        throw new Error('re-uploaded message has no media');
-    }
-
-    // Pehle downloadMediaMessage, phir direct stream
-    try {
-        const buffer = await downloadMediaMessage(
-            updated,
-            'buffer',
-            {},
-            { logger: getLogger(sock), reuploadRequest: sock.updateMediaMessage }
-        );
-        if (buffer && buffer.length) return { buffer, media: updatedInner[updatedType], vType: updatedType };
-    } catch (_) { /* neeche wala tareeqa try hoga */ }
-
-    const stream = await downloadContentFromMessage(
-        updatedInner[updatedType],
-        updatedType.replace('Message', '')
-    );
-    let buffer = Buffer.from([]);
-    for await (const chunk of stream) {
-        buffer = Buffer.concat([buffer, chunk]);
-    }
-    if (!buffer.length) throw new Error('re-uploaded media buffer is empty');
-    return { buffer, media: updatedInner[updatedType], vType: updatedType };
-}
-
-async function downloadViewOnce(sock, from, quotedCtx, inner, vType) {
-    const errors = [];
-    const media = inner[vType];
-
-    // Tareeqa 0 (ASAL HAL): View-once cache — media jab bot ko aaya
-    // tha, usi waqt save ho gaya tha. Quoted message par depend hi
-    // nahi karta, is liye ye hamesha kaam karta hai un view-once
-    // ke liye jo is fix ke baad bot ko mile hon.
-    try {
-        if (getCachedViewOnce && quotedCtx.stanzaId) {
-            const cached = getCachedViewOnce(quotedCtx.stanzaId);
-            if (cached?.buffer?.length) {
-                return { buffer: cached.buffer, media: { ...media, ...cached.media }, vType: cached.vType || vType };
+            let buffer = Buffer.from([]);
+            for await (const chunk of stream) {
+                buffer = Buffer.concat([buffer, chunk]);
             }
-        }
-        // v9 FALLBACK: exact ID miss ho jaye (purana view-once,
-        // pairing/restart ke darmiyan aaya hua, ya ID ka farq)
-        // to usi chat ki sab se recent saved copy bhej do —
-        // user ka maqsad wahi media hasil karna hai. Caption
-        // mein note likha jayega taake user ko pata ho ye
-        // recent copy hai.
-        if (cacheLib?.getLatestCachedForChat) {
-            const latest = cacheLib.getLatestCachedForChat(from, vType);
-            if (latest?.buffer?.length && latest.id !== quotedCtx.stanzaId) {
-                const mins = Math.max(1, Math.round((Date.now() - (latest.ts || Date.now())) / 60000));
-                return {
-                    buffer: latest.buffer,
-                    media: { ...media, ...latest.media },
-                    vType: latest.vType || vType,
-                    note: `⚠️ Reply wali copy exact nahi mili — ye is chat ki sab se recent saved copy hai jo ${mins} minute pehle bot ko mili thi.`
+            if (!buffer.length) throw new Error('download hua lekin buffer khaali hai');
+
+            let payload;
+            if (vType === 'imageMessage') {
+                payload = { image: buffer, caption: 'Downloaded By Salman' };
+            } else if (vType === 'videoMessage') {
+                payload = { video: buffer, caption: 'Downloaded By Salman', gifPlayback: message[vType].gifPlayback || false };
+            } else {
+                payload = {
+                    audio: buffer,
+                    mimetype: message[vType].mimetype || 'audio/mp4',
+                    ptt: message[vType].ptt || false
                 };
             }
-        }
-        const statusLine = getCacheStatus ? getCacheStatus() : 'cache lib load nahi hui — lib/viewonceCache.js missing hai';
-        const libVer = cacheLib?.VERSION || 'purani lib (version nahi hai)';
-        errors.push(`cache: is view-once ki copy nahi mili | lib=${libVer}, selfArm=${sock?.__vvCacheArmed ? 'ON' : 'OFF'} | Cache status: ` + statusLine);
-    } catch (e) {
-        errors.push('cache: ' + (e?.message || e));
-    }
 
-    const botIds = [sock?.user?.id, sock?.user?.lid]
-        .filter(Boolean)
-        .map((x) => String(x).split('@')[0].split(':')[0]);
-    const partNum = String(quotedCtx.participant || '').split('@')[0].split(':')[0];
-    const fakeMsg = {
-        key: {
-            remoteJid: from,
-            fromMe: botIds.length && partNum ? botIds.includes(partNum) : false,
-            id: quotedCtx.stanzaId || undefined,
-            participant: quotedCtx.participant || undefined
-        },
-        message: quotedCtx.quoted
-    };
+            // Usi chat mein bhejo jahan command chali
+            await sock.sendMessage(from, payload, { quoted: msg });
 
-    // Tareeqa 1: downloadMediaMessage (quoted mein url ho to yehi chalega —
-    // aam photos/videos ke liye ye tareeqa bot mein pehle se kaam karta hai)
-    try {
-        const buffer = await downloadMediaMessage(
-            fakeMsg,
-            'buffer',
-            {},
-            { logger: getLogger(sock), reuploadRequest: sock.updateMediaMessage }
-        );
-        if (buffer && buffer.length) return { buffer, media, vType };
-        errors.push('mediaMessage: empty buffer');
-    } catch (e) {
-        errors.push('mediaMessage: ' + (e?.message || e));
-    }
-
-    // Tareeqa 2: direct stream
-    try {
-        const stream = await downloadContentFromMessage(media, vType.replace('Message', ''));
-        let buffer = Buffer.from([]);
-        for await (const chunk of stream) {
-            buffer = Buffer.concat([buffer, chunk]);
-        }
-        if (buffer.length) return { buffer, media, vType };
-        errors.push('direct: empty buffer');
-    } catch (e) {
-        errors.push('direct: ' + (e?.message || e));
-    }
-
-    // Tareeqa 3: REUPLOAD — view-once ke liye asal hal (upar tafseel dekho)
-    try {
-        return await downloadViaReupload(sock, from, quotedCtx, fakeMsg);
-    } catch (e) {
-        errors.push('reupload: ' + (e?.message || e));
-    }
-
-    // Tareeqa 4: bot ka antidelete store (sirf jab antidelete ON ho —
-    // media pehle se disk par save hota hai, server ki zaroorat nahi)
-    try {
-        if (quotedCtx.stanzaId) {
-            const dbPath = path.join(__dirname, '..', 'data', 'messages.json');
-            if (fs.existsSync(dbPath)) {
-                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-                const entry = db[quotedCtx.stanzaId];
-                if (entry?.mediaPath && fs.existsSync(entry.mediaPath)) {
-                    const buffer = fs.readFileSync(entry.mediaPath);
-                    if (buffer.length) return { buffer, media, vType };
-                }
+            // Owner ko bhi copy (agar command kahin aur chali ho)
+            if (from !== OWNER) {
+                await sock.sendMessage(OWNER, payload).catch(() => {});
             }
+        } catch (e) {
+            console.error('[VV] download failed:', e?.message || e);
+            await sock.sendMessage(from, {
+                text: '❌ Failed to download View-Once media.\n\n*Reason:* ' + String(e?.message || e).slice(0, 300)
+            }, { quoted: msg }).catch(() => {});
         }
-        errors.push('store: media not found locally (antidelete OFF hai to ye tareeqa kaam nahi karega)');
-    } catch (e) {
-        errors.push('store: ' + (e?.message || e));
-    }
-
-    throw new Error(errors.join(' | '));
-}
-
-async function vvCommand(sock, from, msg) {
-    try {
-        armCacheListener(sock);
-        const quotedCtx = getQuotedContext(msg);
-
-        if (!quotedCtx) {
-            return await sock.sendMessage(from, {
-                text: '❌ Please reply to a View-Once photo / video / voice note with *.hm*'
-            }, { quoted: msg });
-        }
-
-        const inner = unwrapMessage(quotedCtx.quoted);
-        const vType = findMediaType(inner);
-
-        if (!vType) {
-            return await sock.sendMessage(from, {
-                text: '❌ This is not a View-Once media message. Reply to a View-Once photo, video or voice note.'
-            }, { quoted: msg });
-        }
-
-        const { buffer, media, vType: finalType, note } =
-            await downloadViewOnce(sock, from, quotedCtx, inner, vType);
-
-        let payload;
-        if (finalType === 'imageMessage') {
-            payload = {
-                image: buffer,
-                caption: (note ? note + '\n\n' : '') + (media.caption ? media.caption + '\n\n' : '') + '👁️ *View-Once saved — Downloaded By Salman*'
-            };
-        } else if (finalType === 'videoMessage') {
-            payload = {
-                video: buffer,
-                caption: (note ? note + '\n\n' : '') + (media.caption ? media.caption + '\n\n' : '') + '👁️ *View-Once saved — Downloaded By Salman*',
-                gifPlayback: media.gifPlayback || false
-            };
-        } else {
-            if (note) {
-                await sock.sendMessage(from, { text: note }, { quoted: msg }).catch(() => {});
-            }
-            payload = {
-                audio: buffer,
-                mimetype: media.mimetype || 'audio/mp4',
-                ptt: media.ptt || false
-            };
-        }
-
-        // 1) Usi chat mein wapas bhejo jahan command chali
-        await sock.sendMessage(from, payload, { quoted: msg });
-
-        // 2) Owner ko bhi ek copy (agar command owner ki apni chat mein nahi chali)
-        if (from !== OWNER_JID) {
-            await sock.sendMessage(OWNER_JID, payload)
-                .catch((e) => console.error('[VV] Owner forward failed:', e.message));
-        }
-    } catch (e) {
-        console.error('[VV] Error:', e);
+    } else {
         await sock.sendMessage(from, {
-            text: '❌ View-Once download failed.\n\n*Reason:* ' + String(e?.message || e).slice(0, 600) +
-                '\n\n_Note: .hm sirf un view-once par kaam karega jo is updated bot ke chalne ke BAAD bot ko mile hon — purane view-once ki copy bot ke paas save nahi hoti. Ek fresh view-once bhej kar try karein._'
-        }, { quoted: msg }).catch(() => {});
+            text: 'This is not a View-Once media message.'
+        }, { quoted: msg });
     }
 }
 
