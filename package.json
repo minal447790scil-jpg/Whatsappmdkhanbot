@@ -7,25 +7,10 @@
     "start": "node index.js",
     "pm2": "pm2 start ecosystem.config.js",
     "dev": "nodemon index.js"
-    
-  },
-  "engines": {
-    "node": "20.x"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^7.0.0-rc13",
-       "@xazepysk/scrapers": "^0.0.1",
-    "@lmna22/aio-downloader": "latest",
-    "@pontalabs/ytdl": "latest",
-    "shadowx-ytdl": "latest",
-    "yt-dlp-exec": "latest",
+    "@whiskeysockets/baileys": "7.0.0-rc10",
     "axios": "^1.6.0",
-     "axios": "^1.8.4",
-    "@distube/ytdl-core": "latest",
-    "@raihan07/vidly": "latest",
-    "fallen-yt": "^1.0.2",
-    
-    
     "trs-media-downloader": "^1.0.0",
     "cheerio": "^1.2.0",
     "dotenv": "^16.6.1",
@@ -35,35 +20,26 @@
     "form-data": "^4.0.5",
     "fs-extra": "^11.3.5",
     "multer": "^1.4.5-lts.1",
+    "@raihan07/vidly": "latest",
     "node-telegram-bot-api": "^0.66.0",
     "node-fetch": "^2.7.0",
     "node-webpmux": "^3.2.1",
     "openai": "^4.104.0",
-    "krosztube": "^3.1.2",
-    "yt-search": "^2.12.1",
     "pino": "^10.3.1",
-    "yt-direct": "^1.1.1",
     "qrcode-terminal": "^0.12.0",
     "ruhend-scraper": "latest",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
     "yt-search": "^2.13.1",
-    
+    "iguro-ytdl": "^1.0.0",
     "long": "^5.2.3",
     "ws": "^8.18.3",
-       "youtube-dl-exec": "^3.1.15",
-    "ffprobe-static": "^3.1.0",
-    "ab-downloader": "latest",
-    "ruhend-scraper": "latest",
-    "instagram-url-direct": "latest",
-    "youtube-dl-exec": "latest"
+    "ffprobe-static": "^3.1.0"
     
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   }
 }
-
-
 
 

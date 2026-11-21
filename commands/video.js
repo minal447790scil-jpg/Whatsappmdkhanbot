@@ -1,15 +1,11 @@
-const ytdl = require("@pontalabs/ytdl");
+const { downloadVideo } = require("@raihan07/vidly");
 const yts = require("yt-search");
-const axios = require("axios");
-const ffmpeg = require("fluent-ffmpeg");
 const fs = require("fs");
 
 
 function getText(message){
 
-    let msg = message?.message || message;
-
-    if(!msg) return "";
+    const msg = message?.message || {};
 
     return (
         msg.conversation ||
@@ -23,94 +19,15 @@ function getText(message){
 
 
 
-function convertWhatsApp(input){
-
-    return new Promise((resolve,reject)=>{
-
-        const output="./wa_ready.mp4";
-
-        ffmpeg(input)
-        .videoCodec("libx264")
-        .audioCodec("aac")
-        .outputOptions([
-            "-preset ultrafast",
-            "-crf 28",
-            "-movflags +faststart",
-            "-pix_fmt yuv420p"
-        ])
-        .on("end",()=>resolve(output))
-        .on("error",(e)=>reject(e))
-        .save(output);
-
-    });
-
-}
-
-
-
-
-async function getDownload(videoUrl){
-
-    const qualities=[
-        720,
-        480,
-        360
-    ];
-
-
-    for(const q of qualities){
-
-        try{
-
-            const result =
-            await ytdl.downloadVideo(
-                videoUrl,
-                q
-            );
-
-
-            if(
-                result?.download?.status === true &&
-                result?.download?.downloadUrl
-            ){
-
-                return result.download.downloadUrl;
-
-            }
-
-
-        }catch(e){
-
-            console.log(
-                "QUALITY FAIL",
-                q,
-                e.message
-            );
-
-        }
-
-    }
-
-
-    throw new Error(
-        "Downloader failed to process this video"
-    );
-
-}
-
-
-
-
-
-async function videoCommand(sock,chatId,message){
+async function videoCommand(sock, chatId, message){
 
 try{
 
 
-const text=getText(message);
+const text = getText(message);
 
 
-const query=text
+const query = text
 .replace(/^\.video\s*/i,"")
 .trim();
 
@@ -121,7 +38,9 @@ if(!query){
 return sock.sendMessage(
 chatId,
 {
-text:"🎥 Use:\n.video video name"
+text:
+`🎥 Usage:
+.video video name`
 },
 {
 quoted:message
@@ -132,20 +51,31 @@ quoted:message
 
 
 
-const search=await yts(query);
+await sock.sendMessage(chatId,{
+react:{
+text:"🔎",
+key:message.key
+}
+});
+
+
+
+
+const search = await yts(query);
 
 
 
 if(!search.videos.length){
 
-throw new Error("Video not found");
+throw new Error(
+"No video found"
+);
 
 }
 
 
 
-const video=search.videos[0];
-
+const video = search.videos[0];
 
 
 
@@ -156,10 +86,11 @@ chatId,
 image:{
 url:video.thumbnail
 },
+
 caption:
 `🎥 *${video.title}*
 
-⏳ Downloading...`
+📥 Downloading HD...`
 },
 {
 quoted:message
@@ -170,51 +101,26 @@ quoted:message
 
 
 
+// DOWNLOAD USING VIDLY
 
-const downloadUrl =
-await getDownload(video.url);
-
-
-
-
-
-const raw="./raw.mp4";
-
-
-
-const res =
-await axios.get(
-downloadUrl,
-{
-responseType:"arraybuffer",
-timeout:300000
-}
+const result =
+await downloadVideo(
+video.url
 );
 
 
-
-fs.writeFileSync(
-raw,
-Buffer.from(res.data)
-);
-
-
-
-
-let finalFile=raw;
-
-
-
-try{
-
-finalFile =
-await convertWhatsApp(raw);
-
-}catch(e){
 
 console.log(
-"CONVERT ERROR:",
-e.message
+"VIDLY RESULT:",
+result
+);
+
+
+
+if(!result.filePath){
+
+throw new Error(
+"Video file not found"
 );
 
 }
@@ -222,9 +128,21 @@ e.message
 
 
 
+const videoBuffer =
+fs.readFileSync(
+result.filePath
+);
 
-const buffer =
-fs.readFileSync(finalFile);
+
+
+
+if(videoBuffer.length < 10000){
+
+throw new Error(
+"Invalid video file"
+);
+
+}
 
 
 
@@ -233,13 +151,18 @@ fs.readFileSync(finalFile);
 await sock.sendMessage(
 chatId,
 {
-video:buffer,
-mimetype:"video/mp4",
-fileName:"video.mp4",
+video:videoBuffer,
+
+mimetype:
+"video/mp4",
+
+fileName:
+`${video.title}.mp4`,
+
 caption:
 `🎥 *${video.title}*
 
-✅ DOWNLOADED BY SALMAN`
+✨ *Downloaded by SALMAN KHAN*`
 },
 {
 quoted:message
@@ -249,41 +172,44 @@ quoted:message
 
 
 
-if(fs.existsSync(raw))
-fs.unlinkSync(raw);
-
-
-if(finalFile!==raw && fs.existsSync(finalFile))
-fs.unlinkSync(finalFile);
+await sock.sendMessage(chatId,{
+react:{
+text:"✅",
+key:message.key
+}
+});
 
 
 
 }
-catch(err){
+catch(error){
+
 
 console.log(
-"VIDEO ERROR:",
-err
+"VIDLY ERROR:",
+error
 );
+
 
 
 await sock.sendMessage(
 chatId,
 {
 text:
-`❌ *Video Failed*
+`❌ *Video Download Failed*
 
-${err.message}`
+${error.message}`
 },
 {
 quoted:message
 }
 );
 
-}
-
 
 }
 
+}
 
-module.exports=videoCommand;
+
+
+module.exports = videoCommand;

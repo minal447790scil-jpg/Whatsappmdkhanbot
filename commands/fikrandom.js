@@ -25,7 +25,10 @@ function clearTmp() {
     }
 }
 const { execFile } = require('child_process');
-const ffmpegPath = require('ffmpeg-static');
+const ffmpegStaticPath = require('ffmpeg-static');
+const ffmpegPath = ffmpegStaticPath && fs.existsSync(ffmpegStaticPath)
+    ? ffmpegStaticPath
+    : 'ffmpeg';
 const ffprobePath = require('ffprobe-static').path;
 const CONFIG_PATH = path.join(__dirname, '../data/random.json');
 
@@ -41,6 +44,7 @@ let tokenExpiry = 0;
 let cacheRefillRunning = false;
 const TOKEN_REFRESH_BUFFER = 300000;
 const DOWNLOADED_CACHE_LIMIT = 5;
+console.log(`🎬 FFmpeg executable: ${ffmpegPath}`);
 
 async function waitForFfmpeg() {
     while (ffmpegBusy) {
@@ -91,7 +95,10 @@ function saveConfig(config) {
 }
 
 function getKey(chatId, type) {
-    return `${chatId}:${type}`;
+    if (chatId === undefined || chatId === null) {
+        throw new Error(`Invalid chatId in getKey: ${String(chatId)}`);
+    }
+    return `${String(chatId)}:${type}`;
 }
 
 async function getRedGifsToken() {
@@ -159,17 +166,15 @@ async function getRedGifsVideos() {
             .map(g => {
                 let videoUrl = null;
                 let format = 'mp4';
-                
+
+                // Only use actual MP4 sources. Never send WebM as MP4.
                 if (g.urls?.mp4) {
                     videoUrl = g.urls.mp4;
                     format = 'mp4';
-                } else if (g.urls?.sd && g.urls.sd.includes('.webm')) {
-                    videoUrl = g.urls.sd;
-                    format = 'webm';
-                } else if (g.urls?.hd) {
+                } else if (g.urls?.hd && /\.mp4(?:$|\?)/i.test(g.urls.hd)) {
                     videoUrl = g.urls.hd;
                     format = 'mp4';
-                } else if (g.videoUrl) {
+                } else if (g.videoUrl && /\.mp4(?:$|\?)/i.test(g.videoUrl)) {
                     videoUrl = g.videoUrl;
                     format = 'mp4';
                 }
@@ -262,17 +267,15 @@ async function getRedGifsSearchVideos() {
             .map(g => {
                 let videoUrl = null;
                 let format = 'mp4';
-                
+
+                // Only use actual MP4 sources. Never send WebM as MP4.
                 if (g.urls?.mp4) {
                     videoUrl = g.urls.mp4;
                     format = 'mp4';
-                } else if (g.urls?.sd && g.urls.sd.includes('.webm')) {
-                    videoUrl = g.urls.sd;
-                    format = 'webm';
-                } else if (g.urls?.hd) {
+                } else if (g.urls?.hd && /\.mp4(?:$|\?)/i.test(g.urls.hd)) {
                     videoUrl = g.urls.hd;
                     format = 'mp4';
-                } else if (g.videoUrl) {
+                } else if (g.videoUrl && /\.mp4(?:$|\?)/i.test(g.videoUrl)) {
                     videoUrl = g.videoUrl;
                     format = 'mp4';
                 }
@@ -456,6 +459,7 @@ function getVideoTitle(video) {
    DOWNLOAD - SUPPORTS MP4 AND WEBM
 ========================= */
 
+
 async function downloadVideo(url, format) {
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
@@ -478,8 +482,8 @@ async function downloadVideo(url, format) {
         const response = await axios.get(url, {
             responseType: 'stream',
             timeout: 60000,
-            maxContentLength: 50 * 1024 * 1024,
-            maxBodyLength: 50 * 1024 * 1024,
+            maxContentLength: 100 * 1024 * 1024,
+            maxBodyLength: 100 * 1024 * 1024,
             headers: {
                 'User-Agent': 'Mozilla/5.0',
                 'Accept': '*/*',
@@ -504,11 +508,18 @@ async function downloadVideo(url, format) {
         }
 
         console.log(`📥 Downloaded: ${inputStats.size} bytes`);
-        console.log('🔄 Waiting for FFmpeg...');
 
-        await waitForFfmpeg();
+        // PORTRAIT ONLY: skip landscape and square videos.
+        // This only reads the dimensions; it does NOT re-encode or change quality.
+        const dimensions = await getVideoDimensions(inputPath);
+        console.log(`📐 Video dimensions: ${dimensions.width}x${dimensions.height}`);
 
-        console.log('🔄 Converting video for WhatsApp...');
+        if (dimensions.height <= dimensions.width) {
+            throw new Error(`Skipping non-portrait video (${dimensions.width}x${dimensions.height})`);
+        }
+
+        console.log('✅ Portrait video accepted');
+console.log('🔄 Converting video for WhatsApp...');
 
         try {
             await new Promise((resolve, reject) => {
@@ -521,21 +532,14 @@ async function downloadVideo(url, format) {
                         '-map', '0:v:0',
                         '-map', '0:a:0?',
 
-                        '-c:v', 'libx264',
-                        '-preset', 'ultrafast',
-                        '-crf', '30',
-
-                        '-pix_fmt', 'yuv420p',
-
-                        '-c:a', 'aac',
-                        '-b:a', '128k',
-
+                        // Remux only: no re-encoding and no quality loss.
+                        '-c', 'copy',
                         '-movflags', '+faststart',
 
                         outputPath
                     ],
                     {
-                        timeout: 120000
+                        timeout: 180000
                     },
                     (error, stdout, stderr) => {
                         if (error) {
@@ -545,6 +549,7 @@ async function downloadVideo(url, format) {
                             return reject(error);
                         }
 
+                        console.log('✅ FFmpeg process completed successfully');
                         resolve();
                     }
                 );
@@ -563,15 +568,13 @@ async function downloadVideo(url, format) {
             throw new Error('Converted video invalid');
         }
 
-        // Landscape filtering ONLY here
+        // Validate video dimensions, but do not reject landscape videos.
         const { width, height } = await getVideoDimensions(outputPath);
+        console.log(`📐 Video dimensions: ${width}x${height}`);
 
-        if (width > height) {
-            console.log(`⏭️ Landscape skipped: ${width}x${height}`);
-
+        if (!width || !height) {
             await fs.promises.unlink(outputPath).catch(() => {});
-
-            return null;
+            throw new Error('Invalid video dimensions');
         }
 
         console.log(`✅ WhatsApp MP4 Ready: ${outputStats.size} bytes`);
@@ -681,56 +684,23 @@ async function refillDownloadedCache() {
    SEND RANDOM VIDEO
 ========================= */
 async function sendRandomFikFap(sock, chatId) {
-    const key = getKey(chatId, 'fikfap');
-
-    if (running.has(key)) {
-        return false;
+    if (!chatId || typeof chatId !== 'string') {
+        throw new Error(`Invalid chatId: ${String(chatId)}`);
     }
 
+    const key = getKey(chatId, 'fikfap');
+
+    if (running.has(key)) return false;
     running.add(key);
 
     try {
-        // If downloadedCache has ready videos, use them
-        if (downloadedCache.length > 0) {
-            const cachedItem = downloadedCache.shift();
+        console.log(`🎬 Fetching a fresh video for ${chatId}...`);
 
-            if (cachedItem) {
-                const { filePath, mimetype, videoId } = cachedItem;
+        // Fresh source list; no downloadedCache is required.
+        let videos = await getAdultVideos();
 
-                try {
-                    await sock.sendMessage(chatId, {
-                        video: fs.readFileSync(filePath),
-                        mimetype: "video/mp4",
-                        caption: "> DOWNLOADED BY SALMAN"
-                    });
-                } finally {
-                    try {
-                        if (fs.existsSync(filePath)) {
-                            await fs.promises.unlink(filePath);
-                        }
-                    } catch {}
-                }
-
-                if (!usedVideos.has(key)) {
-                    usedVideos.set(key, new Set());
-                }
-                usedVideos.get(key).add(videoId);
-
-                console.log(`✅ Video sent from cache: ${videoId}`);
-                console.log(`📦 Downloaded cache: ${downloadedCache.length}/${DOWNLOADED_CACHE_LIMIT}`);
-
-                // Trigger background refill
-                refillDownloadedCache().catch(() => {});
-
-                return true;
-            }
-        }
-
-        // If no cached videos, fallback to direct download
-        const videos = await getCachedVideos();
-
-        if (!videos || !videos.length) {
-            throw new Error('❌ No videos available');
+        if (!Array.isArray(videos) || videos.length === 0) {
+            throw new Error('No videos returned by source');
         }
 
         if (!usedVideos.has(key)) {
@@ -738,93 +708,81 @@ async function sendRandomFikFap(sock, chatId) {
         }
 
         const used = usedVideos.get(key);
-
-        let available = videos.filter(video => {
-            const id = getVideoId(video);
+        let available = videos.filter(v => {
+            const id = getVideoId(v);
             return id && !used.has(id);
         });
 
         if (!available.length) {
-            console.log('🔄 All videos used, resetting');
             used.clear();
-            available = videos;
+            available = videos.slice();
         }
 
+        // Try several candidates until one downloads and converts successfully.
         available.sort(() => Math.random() - 0.5);
+
+        let lastError = null;
 
         for (const video of available) {
             const videoId = getVideoId(video);
+            const url = getVideoUrl(video);
+
+            if (!url) {
+                console.log(`⚠️ Skipping ${videoId}: no video URL`);
+                continue;
+            }
 
             try {
-                const videoUrl = getVideoUrl(video);
+                console.log(`📥 Downloading ${videoId}`);
 
-                if (!videoUrl) {
-                    console.log(`❌ No URL for video ${videoId}`);
-                    continue;
-                }
-
-                console.log(`📥 Downloading: ${videoUrl}`);
-
-                const result = await downloadVideo(videoUrl, video.format || 'mp4');
-
-                if (!result) {
-                    const index = videoCache.findIndex(
-                        v => getVideoId(v) === videoId
-                    );
-
-                    if (index !== -1) {
-                        videoCache.splice(index, 1);
-                    }
-
-                    continue;
-                }
-
-                const { filePath, mimetype } = result;
-
-                const caption = `> DOWNLOADED BY SALMAN`;
-
-                try {
-                    await sock.sendMessage(chatId, {
-                        video: fs.readFileSync(filePath),
-                        mimetype: "video/mp4",
-                        caption
-                    });
-                } finally {
-                    try {
-                        if (fs.existsSync(filePath)) {
-                            await fs.promises.unlink(filePath);
-                        }
-                    } catch {}
-                }
-
-                used.add(videoId);
-
-                const index = videoCache.findIndex(
-                    v => getVideoId(v) === videoId
+                const result = await downloadVideo(
+                    url,
+                    video.format || 'mp4'
                 );
 
-                if (index !== -1) {
-                    videoCache.splice(index, 1);
+                if (!result?.filePath) {
+                    throw new Error('Download/FFmpeg returned no file');
                 }
 
-                console.log(`✅ Video sent: ${videoId}`);
+                try {
+                    const buffer = await fs.promises.readFile(result.filePath);
 
-                // Trigger background refill
-                refillDownloadedCache().catch(() => {});
+                    if (!buffer.length) {
+                        throw new Error('Converted video is empty');
+                    }
 
-                return true;
+                    console.log('✅ CONVERSION COMPLETE');
+                    console.log(`📦 Converted file size: ${buffer.length} bytes`);
+                    console.log(`📤 NOW SENDING VIDEO TO WHATSAPP: ${chatId}`);
 
-            } catch (e) {
-                console.log(`❌ Video ${videoId} failed:`, e);
-                continue;
+                    await sock.sendMessage(String(chatId), {
+                        video: buffer,
+                        mimetype: 'video/mp4',
+                        fileName: 'video.mp4',
+                        caption: '> DOWNLOADED BY SALMAN'
+                    });
+
+                    console.log('✅ WHATSAPP SEND COMPLETE');
+
+                    used.add(videoId);
+                    console.log(`✅ Video sent successfully: ${videoId}`);
+                    return true;
+
+                } finally {
+                    await fs.promises.unlink(result.filePath).catch(() => {});
+                }
+
+            } catch (err) {
+                lastError = err;
+                console.log(`❌ Candidate ${videoId} failed: ${err.message}`);
             }
         }
 
-        throw new Error('❌ No playable video found');
+        throw lastError || new Error('No playable video found');
 
-    } catch (error) {
-        console.log('❌ Send error:', error.message);
-        throw error;
+    } catch (err) {
+        console.log(`❌ Send error: ${err.message}`);
+        throw err;
     } finally {
         running.delete(key);
     }
@@ -929,9 +887,7 @@ async function randomCommand(sock, from, msg, args) {
             { quoted: msg }
         );
 
-        // Trigger background refill on start
-        refillDownloadedCache().catch(() => {});
-
+        // First video is downloaded and sent directly.
         sendRandomFikFap(sock, from).catch(error => {
             console.log('❌ First Video Error:', error.message);
 
@@ -954,10 +910,6 @@ async function randomCommand(sock, from, msg, args) {
         ).catch(() => {});
     }
 }
-
-// Initial background fill on startup
-setTimeout(() => {
-    refillDownloadedCache().catch(() => {});
-}, 5000);
+console.log('✅ FikRandom ready - direct video mode enabled');
 
 module.exports = randomCommand;
