@@ -25,6 +25,8 @@ const commands = {
     ttp: require('./commands/ttp'),
     attp: require('./commands/attp'),
     tts: require('./commands/tts'),
+    pinterest: require('./commands/pinterest'),
+    google: require('./commands/google'),
         ai: require('./commands/ai').aiCommand,
        kick: require('./commands/kick'),
         askGemini: require('./commands/ai').askGemini,
@@ -231,7 +233,7 @@ const WA_BROWSER_MODE = (process.env.WA_BROWSER || 'android').toLowerCase();
 function getBrowserTuple(isPairing = false) {
     // Pairing ke waqt hamesha web identity (ye pairing code ke saath chalti hai).
     // Pairing ke baad ke har connect par WA_BROWSER wali identity (default android).
-    if (isPairing || WA_BROWSER_MODE === 'web') return Browsers.ubuntu('Chrome');
+    if (isPairing || WA_BROWSER_MODE === 'web') return Browsers.macOS('Safari');
     try {
         let t = null;
         if (typeof Browsers.android === 'function') t = Browsers.android('Chrome');
@@ -1068,6 +1070,10 @@ const publicCommands = [
     'ttp',
     'attp',
     'tts',
+    'pinterest',
+    'pin',
+    'google',
+    'search',
     'apk',
     'gdrive',
     'mf',
@@ -1110,17 +1116,17 @@ if (!isBotOwner) {
                                             const menuEmojis = ['📥', '⏳', '📜'];
                                             for (const emoji of menuEmojis) {
                                                 await this.sock.sendMessage(from, { react: { text: emoji, key: msg.key } });
-                                                await new Promise(r => setTimeout(r, 500));
+                                                await new Promise(r => setTimeout(r, 250));
                                             }
                                             // Animated loading bar (message edits) — khatam par message rehta hai, delete nahi hota
                                             try {
                                                 const loadMsg = await this.sock.sendMessage(from, { text: '📜 *Loading Menu...*\n[░░░░░░░░░░] 0%' }, { quoted: msg });
                                                 const barFrames = ['[██░░░░░░░░] 20%', '[████░░░░░░] 40%', '[██████░░░░] 60%', '[████████░░] 80%', '[██████████] 100%'];
                                                 for (const frame of barFrames) {
-                                                    await new Promise(r => setTimeout(r, 750));
+                                                    await new Promise(r => setTimeout(r, 350));
                                                     await this.sock.sendMessage(from, { text: `📜 *Loading Menu...*\n${frame}`, edit: loadMsg.key }).catch(() => {});
                                                 }
-                                                await new Promise(r => setTimeout(r, 400));
+                                                await new Promise(r => setTimeout(r, 200));
                                                 await this.sock.sendMessage(from, { text: '✅ *Menu Loaded!*\n[██████████] 100%', edit: loadMsg.key }).catch(() => {});
                                             } catch (_) {}
                                             const menuText = `╭━━━〔 ${toBold("SALMAN KHAN")} 〕━━━┈⊷\n` +
@@ -1148,6 +1154,7 @@ if (!isBotOwner) {
                                                            `┃ ⋄ ${toBold(".𝘁𝗶𝗸𝘁𝗼𝗸 (𝘂𝗿𝗹)")}\n` +
                                                            `┃ ⋄ ${toBold('.random tiktok on')}\n` +
                                                            `┃ ⋄ ${toBold('.random tiktok off')}\n` +
+                                                           `┃ ⋄ ${toBold(".pinterest (url)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝗶𝗻𝘀𝘁𝗮 (𝘂𝗿𝗹)")}\n` +
                                                         //   `│ ◇ ${toBold('.randominsta on/off')}\n` +
                                                            `┃ ⋄ ${toBold(".sticker (reply image)")}\n` +
@@ -1166,6 +1173,7 @@ if (!isBotOwner) {
                                                          //  `┃ ⋄ ${toBold(".𝗰𝗵𝗮𝗿𝗮𝗰𝘁𝗲𝗿 (𝗺𝗲𝗻𝘁𝗶𝗼𝗻)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝗴𝗱𝗿𝗶𝘃𝗲 (𝘂𝗿𝗹)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝗺𝗳 (𝘂𝗿𝗹)")}\n` +
+                                                           `┃ ⋄ ${toBold(".google (search)")}\n` +
                                                            `╰━━━━━━━━━━━━━━━━━━┈⊷\n\n` +
                                                            `╭━━━〔 ${toBold("𝗔𝗗𝗠𝗜𝗡")} 〕━━━┈⊷\n` +
                                                            `┃ ⋄ ${toBold(".𝗽𝗿𝗶𝘃𝗮𝘁𝗲")}\n` +
@@ -1246,6 +1254,16 @@ case 'attp':
 
 case 'tts':
     await commands.tts(this.sock, from, msg);
+    break;
+
+case 'pinterest':
+case 'pin':
+    await commands.pinterest(this.sock, from, msg);
+    break;
+
+case 'google':
+case 'search':
+    await commands.google(this.sock, from, msg);
     break;
     
     case 'ai': {
