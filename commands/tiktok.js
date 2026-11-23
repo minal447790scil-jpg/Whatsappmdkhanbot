@@ -15,11 +15,20 @@ function withTimeout(promise, ms, name) {
     ]).finally(() => clearTimeout(timer));
 }
 
-// DELAY FIX (2026-11-23): pehle sirf ruhend ttdl tha — live test
-// mein akela 58s le raha tha, is liye download bhi slow tha aur
-// animation bhi atakti lagti thi. Ab teen sources RACE karte hain,
-// jo pehle sahi video de wahi jeet'ta hai:
-//   siputzx (~2s live) · tikwm · ruhend ttdl (backup)
+// Text mein se asal TikTok link nikalo (user aksar link ke sath
+// fazool text bhi bhej deta hai — pura text URL bana kar bhejne
+// se har source fail ho jata tha)
+function extractUrl(text) {
+    const m = String(text || "").match(
+        /https?:\/\/(?:www\.|vm\.|vt\.)?(?:tiktok\.com|tiktokcdn\.com)[^\s]+/i
+    );
+    return m ? m[0].replace(/[),.!]+$/, "") : null;
+}
+
+// Teen sources RACE karte hain — jo pehle sahi jawab de wahi
+// jeet'ta hai (ruhend akela ~58s leta tha, siputzx ~2s):
+//   siputzx · tikwm · ruhend ttdl (backup)
+// Video ke sath slideshow (photo) posts bhi handle hain.
 async function fromSiputzx(url) {
     const { data } = await axios.get(
         "https://api.siputzx.my.id/api/d/tiktok",
@@ -29,12 +38,17 @@ async function fromSiputzx(url) {
             timeout: 20000
         }
     );
-    const v =
-        data?.data?.video?.hd?.url ||
-        data?.data?.video?.sd?.url ||
-        null;
-    if (!v) throw new Error("siputzx: no video");
-    return { source: "siputzx", url: v };
+    const d = data?.data || {};
+    if (d.type === "image" && Array.isArray(d.images) && d.images.length) {
+        const urls = d.images
+            .map((im) => (typeof im === "string" ? im : im?.url))
+            .filter((u) => typeof u === "string" && u.startsWith("http"));
+        if (urls.length) return { source: "siputzx", kind: "images", urls };
+    }
+    const hd = d.video?.hd?.url || null;
+    const sd = d.video?.sd?.url || null;
+    if (!hd && !sd) throw new Error("siputzx: no video");
+    return { source: "siputzx", kind: "video", url: hd || sd, altUrl: sd };
 }
 
 async function fromTikwm(url) {
@@ -43,9 +57,13 @@ async function fromTikwm(url) {
         headers: { "User-Agent": "Mozilla/5.0" },
         timeout: 20000
     });
-    const v = data?.data?.hdplay || data?.data?.play || null;
+    const d = data?.data || {};
+    if (Array.isArray(d.images) && d.images.length) {
+        return { source: "tikwm", kind: "images", urls: d.images.slice(0, 10) };
+    }
+    const v = d.hdplay || d.play || null;
     if (!v) throw new Error("tikwm: no video");
-    return { source: "tikwm", url: v };
+    return { source: "tikwm", kind: "video", url: v };
 }
 
 async function fromRuhend(url) {
@@ -67,10 +85,10 @@ async function fromRuhend(url) {
     if (!v || !String(v).startsWith("http")) {
         throw new Error("ruhend: no video");
     }
-    return { source: "ruhend", url: v };
+    return { source: "ruhend", kind: "video", url: v };
 }
 
-async function getVideoUrl(url) {
+async function raceSources(url) {
     const t0 = Date.now();
     const result = await Promise.any([
         withTimeout(fromSiputzx(url), 25000, "siputzx"),
@@ -81,11 +99,26 @@ async function getVideoUrl(url) {
     return result;
 }
 
+// Video pehle khud buffer mein download karo, phir bhejo —
+// WhatsApp/Baileys ka apna URL fetcher kuch CDN links par fail
+// ho jata tha, jis se video aata hi nahi tha aur status delete
+// ho jata tha. Buffer fail ho to URL-send akhri sahara hai.
+async function fetchBuffer(url, maxMB = 64) {
+    const res = await axios.get(url, {
+        responseType: "arraybuffer",
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeout: 60000,
+        maxContentLength: maxMB * 1024 * 1024,
+        maxBodyLength: maxMB * 1024 * 1024
+    });
+    return Buffer.from(res.data);
+}
+
 async function tiktokCommand(sock, chatId, message) {
 
-    // Animated status message — fetch ke doran bar chalti rehti
-    // hai; fail ho to status khamoshi se delete (is command ka
-    // purana silent behavior barqarar), success par 100%.
+    // Animated status (owner ki hidayat: animation RAHEGI) —
+    // fetch ke doran bar chalti hai, akhir mein sirf 100% bar,
+    // "Downloaded" lafz nahi aayega.
     let statusKey = null;
     let progressTimer = null;
 
@@ -121,13 +154,12 @@ async function tiktokCommand(sock, chatId, message) {
             "";
 
 
-        const query =
-            text
-            .replace(/^\.(tiktok|tt)\s+/i, "")
-            .trim();
+        const url = extractUrl(
+            text.replace(/^\.(tiktok|tt)\b/i, "")
+        );
 
 
-        if (!query) {
+        if (!url) {
 
             return await sock.sendMessage(
                 chatId,
@@ -173,30 +205,97 @@ async function tiktokCommand(sock, chatId, message) {
         let winner;
 
         try {
-            winner = await getVideoUrl(query);
+            winner = await raceSources(url);
         } catch (e) {
+            // Chat mein khamoshi (purana behavior), lekin logs mein
+            // wajah lazmi — taake fail nazar aaye, ghayb na ho
+            console.error(
+                "[TT] ALL SOURCES FAILED:",
+                (e?.errors || [e]).map((x) => x?.message || String(x)).join(" | ")
+            );
             await dropStatus();
-            return; // second bot silent
+            return;
         }
         stopProgress();
 
-        console.log(`[TT] source: ${winner.source} in ${winner.ms}ms`);
+        console.log(
+            `[TT] source: ${winner.source} kind: ${winner.kind} in ${winner.ms}ms`
+        );
 
 
         await setStatus("🎬 *Sending...*\n[███████░░░] 70%");
 
-        await sock.sendMessage(
-            chatId,
-            {
-                video: {
-                    url: winner.url
-                },
+        if (winner.kind === "images") {
+            // Slideshow post — tasaveer bhejo
+            let sent = 0;
+            for (const imgUrl of winner.urls.slice(0, 6)) {
+                try {
+                    await sock.sendMessage(
+                        chatId,
+                        {
+                            image: { url: imgUrl },
+                            caption:
+                                sent === 0
+                                    ? "✅ *TIKTOK DOWNLOADED BY SALMAN KHAN*"
+                                    : undefined
+                        },
+                        { quoted: sent === 0 ? message : undefined }
+                    );
+                    sent++;
+                } catch (e) {
+                    console.error("[TT] image send fail:", e?.message || e);
+                }
+            }
+            if (!sent) throw new Error("slideshow: koi image nahi gayi");
+        } else {
+            // Video — pehle buffer, phir (SD par) dobara, akhri
+            // sahara seedha URL-send
+            let sent = false;
+            let lastErr = null;
 
-                caption:
-                "✅ *TIKTOK DOWNLOADED BY SALMAN KHAN*"
-            },
-            { quoted: message }
-        );
+            for (const candidate of [winner.url, winner.altUrl]) {
+                if (!candidate || sent) continue;
+                try {
+                    const buf = await fetchBuffer(candidate);
+                    await sock.sendMessage(
+                        chatId,
+                        {
+                            video: buf,
+                            mimetype: "video/mp4",
+                            caption: "✅ *TIKTOK DOWNLOADED BY SALMAN KHAN*"
+                        },
+                        { quoted: message }
+                    );
+                    sent = true;
+                    console.log(
+                        `[TT] sent via buffer (${(buf.length / 1048576).toFixed(1)}MB)`
+                    );
+                } catch (e) {
+                    lastErr = e;
+                    console.error("[TT] buffer send fail:", e?.message || e);
+                }
+            }
+
+            if (!sent) {
+                try {
+                    await sock.sendMessage(
+                        chatId,
+                        {
+                            video: { url: winner.url },
+                            caption: "✅ *TIKTOK DOWNLOADED BY SALMAN KHAN*"
+                        },
+                        { quoted: message }
+                    );
+                    sent = true;
+                    console.log("[TT] sent via url fallback");
+                } catch (e) {
+                    lastErr = e;
+                    console.error("[TT] url send fail:", e?.message || e);
+                }
+            }
+
+            if (!sent) throw lastErr || new Error("video send failed");
+        }
 
 
         await sock.sendMessage(chatId, {
@@ -206,12 +305,13 @@ async function tiktokCommand(sock, chatId, message) {
             }
         });
 
-        await setStatus("✅ *Downloaded!*\n[██████████] 100%");
+        // Sirf mukammal bar — "Downloaded" lafz nahi
+        await setStatus("[██████████] 100%");
 
 
     } catch (e) {
 
-        // region / second session errors hide
+        console.error("[TT] FAILED:", e?.message || e);
         await dropStatus().catch(() => {});
         return;
 
@@ -221,4 +321,5 @@ async function tiktokCommand(sock, chatId, message) {
 
 
 module.exports = tiktokCommand;
-module.exports.getVideoUrl = getVideoUrl;
+module.exports.raceSources = raceSources;
+module.exports.extractUrl = extractUrl;
