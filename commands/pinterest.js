@@ -17,7 +17,34 @@ function withTimeout(promise, ms, name) {
 
 // Pinterest SEARCH (siputzx free API): keywords do, asal Pinterest
 // pins ki media (image/video) seedha chat mein aati hai.
-async function searchPinterest(query) {
+// Live sach (2026-11-23 test): videos sirf tab aati hain jab query
+// mein "video" ho — aur API ki order relevance ke hisab se nahi
+// hoti. Is liye:
+//  - video wali query -> videos PEHLE, phir images
+//  - har item ko query se match par score karke sab se relevant
+//    pehle bhejte hain (jo manga, wahi mile)
+const INTENT_WORDS = new Set([
+    "video", "videos", "pic", "pics", "photo", "photos", "image",
+    "images", "wallpaper", "wallpapers", "clip", "clips", "reel", "reels"
+]);
+
+function queryTerms(query) {
+    return query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 2 && !INTENT_WORDS.has(w));
+}
+
+function itemScore(it, terms) {
+    const hay = (
+        (it?.grid_title || "") + " " +
+        (it?.description || "") + " " +
+        (it?.seo_alt_text || "")
+    ).toLowerCase();
+    return terms.reduce((s, t) => s + (hay.includes(t) ? 1 : 0), 0);
+}
+
+async function fetchPinItems(query) {
     const { data } = await withTimeout(
         axios.get("https://api.siputzx.my.id/api/s/pinterest", {
             params: { query },
@@ -27,12 +54,13 @@ async function searchPinterest(query) {
         25000,
         "pinterest-search"
     );
+    return Array.isArray(data?.data) ? data.data : [];
+}
 
-    const items = Array.isArray(data?.data) ? data.data : [];
+function buildMedia(items, terms) {
     const seen = new Set();
     const media = [];
-
-    for (const it of items) {
+    items.forEach((it, idx) => {
         let entry = null;
         if (typeof it?.video_url === "string" && it.video_url) {
             entry = { type: "video", url: it.video_url };
@@ -43,12 +71,42 @@ async function searchPinterest(query) {
         }
         if (entry && !seen.has(entry.url)) {
             seen.add(entry.url);
-            media.push(entry);
+            media.push({ ...entry, score: itemScore(it, terms), idx });
         }
-        if (media.length >= 6) break;
+    });
+    return media;
+}
+
+async function searchPinterest(query) {
+    const terms = queryTerms(query);
+    const videoIntent =
+        /\b(video|videos|clip|clips|reel|reels|movie|film)\b/i.test(query);
+
+    let items = await fetchPinItems(query);
+    let media = buildMedia(items, terms);
+
+    // Video manga tha lekin query mein "video" lafz nahi tha
+    // (maslan "car reels") aur ek bhi video nahi mili — ek dafa
+    // "video" jod kar dobara dhoondho.
+    if (videoIntent && !media.some((m) => m.type === "video") && !/\bvideo/i.test(query)) {
+        try {
+            const more = await fetchPinItems(query + " video");
+            media = buildMedia(items.concat(more), terms);
+        } catch {}
     }
 
-    return media;
+    if (videoIntent) {
+        media.sort(
+            (a, b) =>
+                (b.type === "video") - (a.type === "video") ||
+                b.score - a.score ||
+                a.idx - b.idx
+        );
+    } else {
+        media.sort((a, b) => b.score - a.score || a.idx - b.idx);
+    }
+
+    return media.slice(0, 6).map(({ type, url }) => ({ type, url }));
 }
 
 async function pinterestCommand(sock, chatId, message) {
@@ -199,18 +257,17 @@ async function pinterestCommand(sock, chatId, message) {
         let sent = 0;
         for (const m of media) {
             try {
-                const caption =
-                    sent === 0 ? `📌 *Pinterest:* ${query}` : undefined;
+                // Koi caption nahi — saaf chat, sirf media
                 if (m.type === "video") {
                     await sock.sendMessage(
                         chatId,
-                        { video: { url: m.url }, caption },
+                        { video: { url: m.url } },
                         { quoted: sent === 0 ? message : undefined }
                     );
                 } else {
                     await sock.sendMessage(
                         chatId,
-                        { image: { url: m.url }, caption },
+                        { image: { url: m.url } },
                         { quoted: sent === 0 ? message : undefined }
                     );
                 }
