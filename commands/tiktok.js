@@ -166,7 +166,7 @@ async function tiktokCommand(sock, chatId, message) {
             progressTimer = setInterval(() => {
                 setStatus(frames[fi % frames.length]);
                 fi++;
-            }, 900);
+            }, 400);
         }
 
 
