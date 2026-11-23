@@ -170,7 +170,7 @@ function isDownloadable(node) {
 async function downloadIfKeyed(node, type) {
     if (!isDownloadable(node)) return null;
     const k = node.mediaKey;
-    const fixed = Buffer.isBuffer(k) ? node : { ...node, mediaKey: Buffer.from(Array.isArray(k) ? k : k.data) };
+    const fixed = Buffer.isBuffer(k) ? node : { ...node, mediaKey: Buffer.from(k?.data ?? k) };
     const stream = await downloadContentFromMessage(fixed, type);
     let buffer = Buffer.from([]);
     for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);

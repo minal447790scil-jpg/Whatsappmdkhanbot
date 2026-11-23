@@ -1,6 +1,7 @@
+const axios = require("axios");
 const { ttdl } = require("ruhend-scraper");
 
-// ttdl kabhi hang ho jata hai — 30s timeout taake command atki na rahe
+// Koi source hang ho jaye to timeout — command atki na rahe
 function withTimeout(promise, ms, name) {
     let timer;
     return Promise.race([
@@ -14,11 +15,77 @@ function withTimeout(promise, ms, name) {
     ]).finally(() => clearTimeout(timer));
 }
 
+// DELAY FIX (2026-11-23): pehle sirf ruhend ttdl tha — live test
+// mein akela 58s le raha tha, is liye download bhi slow tha aur
+// animation bhi atakti lagti thi. Ab teen sources RACE karte hain,
+// jo pehle sahi video de wahi jeet'ta hai:
+//   siputzx (~2s live) · tikwm · ruhend ttdl (backup)
+async function fromSiputzx(url) {
+    const { data } = await axios.get(
+        "https://api.siputzx.my.id/api/d/tiktok",
+        {
+            params: { url },
+            headers: { "User-Agent": "Mozilla/5.0" },
+            timeout: 20000
+        }
+    );
+    const v =
+        data?.data?.video?.hd?.url ||
+        data?.data?.video?.sd?.url ||
+        null;
+    if (!v) throw new Error("siputzx: no video");
+    return { source: "siputzx", url: v };
+}
+
+async function fromTikwm(url) {
+    const { data } = await axios.get("https://www.tikwm.com/api/", {
+        params: { url, hd: 1 },
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeout: 20000
+    });
+    const v = data?.data?.hdplay || data?.data?.play || null;
+    if (!v) throw new Error("tikwm: no video");
+    return { source: "tikwm", url: v };
+}
+
+async function fromRuhend(url) {
+    const d = await ttdl(url);
+    let v;
+    if (typeof d === "string") {
+        v = d;
+    } else {
+        v =
+            d?.video ||
+            d?.video_url ||
+            d?.download ||
+            d?.url ||
+            d?.data?.video ||
+            d?.data?.play ||
+            d?.data?.nowm;
+    }
+    if (typeof v === "function") v = await v();
+    if (!v || !String(v).startsWith("http")) {
+        throw new Error("ruhend: no video");
+    }
+    return { source: "ruhend", url: v };
+}
+
+async function getVideoUrl(url) {
+    const t0 = Date.now();
+    const result = await Promise.any([
+        withTimeout(fromSiputzx(url), 25000, "siputzx"),
+        withTimeout(fromTikwm(url), 25000, "tikwm"),
+        withTimeout(fromRuhend(url), 25000, "ruhend")
+    ]);
+    result.ms = Date.now() - t0;
+    return result;
+}
+
 async function tiktokCommand(sock, chatId, message) {
 
-    // Animated status message (IG wali tarah) — fetch ke doran bar
-    // chalti rehti hai; fail ho to status khamoshi se delete (is
-    // command ka purana silent behavior barqarar), success par 100%.
+    // Animated status message — fetch ke doran bar chalti rehti
+    // hai; fail ho to status khamoshi se delete (is command ka
+    // purana silent behavior barqarar), success par 100%.
     let statusKey = null;
     let progressTimer = null;
 
@@ -99,55 +166,21 @@ async function tiktokCommand(sock, chatId, message) {
             progressTimer = setInterval(() => {
                 setStatus(frames[fi % frames.length]);
                 fi++;
-            }, 1400);
+            }, 900);
         }
 
 
-        let downloadData;
+        let winner;
 
         try {
-            downloadData =
-                await withTimeout(ttdl(query), 30000, "ttdl");
+            winner = await getVideoUrl(query);
         } catch (e) {
             await dropStatus();
             return; // second bot silent
         }
         stopProgress();
 
-
-        let videoUrl;
-
-
-        if (typeof downloadData === "string") {
-
-            videoUrl = downloadData;
-
-        } else {
-
-            videoUrl =
-                downloadData?.video ||
-                downloadData?.video_url ||
-                downloadData?.download ||
-                downloadData?.url ||
-                downloadData?.data?.video ||
-                downloadData?.data?.play ||
-                downloadData?.data?.nowm;
-
-        }
-
-
-        if (typeof videoUrl === "function") {
-            videoUrl = await videoUrl();
-        }
-
-
-        if (
-            !videoUrl ||
-            !videoUrl.startsWith("http")
-        ) {
-            await dropStatus();
-            return; // second bot silent
-        }
+        console.log(`[TT] source: ${winner.source} in ${winner.ms}ms`);
 
 
         await setStatus("🎬 *Sending...*\n[███████░░░] 70%");
@@ -156,7 +189,7 @@ async function tiktokCommand(sock, chatId, message) {
             chatId,
             {
                 video: {
-                    url: videoUrl
+                    url: winner.url
                 },
 
                 caption:
@@ -188,3 +221,4 @@ async function tiktokCommand(sock, chatId, message) {
 
 
 module.exports = tiktokCommand;
+module.exports.getVideoUrl = getVideoUrl;
