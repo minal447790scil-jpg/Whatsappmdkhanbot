@@ -127,11 +127,6 @@ async function vvCommand(sock, from, msg) {
             });
         }
 
-        // Confirm back in the chat where the command was used, so success is
-        // visible without needing to check the owner's chat separately.
-        await sock.sendMessage(from, {
-            text: "✅ View-once media downloaded and sent to owner."
-        }, { quoted: msg }).catch(() => {});
 
     } catch (e) {
         console.error("VV ERROR:", e);
