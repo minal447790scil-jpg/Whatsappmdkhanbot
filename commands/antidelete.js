@@ -356,3 +356,4 @@ if (isStatus) {
 module.exports = handleAntideleteCommand;
 module.exports.storeMessage = storeMessage;
 module.exports.handleMessageRevocation = handleMessageRevocation;
+module.exports.loadAntideleteConfig = loadAntideleteConfig;

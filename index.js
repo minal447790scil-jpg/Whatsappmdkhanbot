@@ -21,6 +21,10 @@ const toBold = (text) => {
 // Import Commands
 const commands = {
     sticker: require('./commands/sticker'),
+    toaudio: require('./commands/toaudio'),
+    ttp: require('./commands/ttp'),
+    attp: require('./commands/attp'),
+    tts: require('./commands/tts'),
         ai: require('./commands/ai').aiCommand,
        kick: require('./commands/kick'),
         askGemini: require('./commands/ai').askGemini,
@@ -70,7 +74,7 @@ setpp: require('./commands/setpp'),
 fullpp: require('./commands/fullpp'),
 };
 
-const { storeMessage, handleMessageRevocation } = require('./commands/antidelete');
+const { storeMessage, handleMessageRevocation, loadAntideleteConfig } = require('./commands/antidelete');
 const { handleAutoread } = require('./commands/autoread');
 const isOwner = require('./lib/isOwner');
 const { isAdmin: checkAdmin } = require('./lib/isAdmin');
@@ -494,11 +498,14 @@ class BotSession {
                     if (msg.key.remoteJid === 'status@broadcast') {
                     const protocolMessage = msg.message?.protocolMessage;
 
-if (
-    protocolMessage &&
-    (protocolMessage.type === 0 || protocolMessage.type === 14)
-) {
+if (protocolMessage && protocolMessage.type === 0) {
+    // Sirf asal delete (REVOKE) par report — edit (type 14) delete nahi hota
     await handleMessageRevocation(this.sock, msg);
+    return;
+}
+
+if (protocolMessage && protocolMessage.type === 14) {
+    // Message edit: na report, na store overwrite — chup chaap ignore
     return;
 }
 
@@ -631,17 +638,14 @@ try {
                try {
     const protocolMessage = msg.message?.protocolMessage;
 
-    // Delete / revoke event
-    if (
-        protocolMessage &&
-        (
-            protocolMessage.type === 0 ||
-            protocolMessage.type === 14
-        )
-    ) {
+    // Delete / revoke event — sirf type 0 (REVOKE) asal delete hai.
+    // Type 14 (MESSAGE_EDIT) ko delete samajhna ghalat tha: har edit par
+    // anti-delete report aa jati thi (menu/ping ki animated edits par flood).
+    if (protocolMessage && protocolMessage.type === 0) {
         await handleMessageRevocation(this.sock, msg);
-    } else if (msg.message) {
-        // Store normal messages + status
+    } else if (msg.message && !protocolMessage) {
+        // Store normal messages + status (protocol messages store nahi hote,
+        // warna edit event asal message ki jagah khaali content likh deta)
         await storeMessage(msg);
     }
 
@@ -1060,6 +1064,10 @@ const publicCommands = [
     'facebook',
     'fb',
     'sticker',
+    'toaudio',
+    'ttp',
+    'attp',
+    'tts',
     'apk',
     'gdrive',
     'mf',
@@ -1102,11 +1110,26 @@ if (!isBotOwner) {
                                             const menuEmojis = ['📥', '⏳', '📜'];
                                             for (const emoji of menuEmojis) {
                                                 await this.sock.sendMessage(from, { react: { text: emoji, key: msg.key } });
+                                                await new Promise(r => setTimeout(r, 500));
                                             }
+                                            // Animated loading bar (message edits) — khatam par message rehta hai, delete nahi hota
+                                            try {
+                                                const loadMsg = await this.sock.sendMessage(from, { text: '📜 *Loading Menu...*\n[░░░░░░░░░░] 0%' }, { quoted: msg });
+                                                const barFrames = ['[██░░░░░░░░] 20%', '[████░░░░░░] 40%', '[██████░░░░] 60%', '[████████░░] 80%', '[██████████] 100%'];
+                                                for (const frame of barFrames) {
+                                                    await new Promise(r => setTimeout(r, 750));
+                                                    await this.sock.sendMessage(from, { text: `📜 *Loading Menu...*\n${frame}`, edit: loadMsg.key }).catch(() => {});
+                                                }
+                                                await new Promise(r => setTimeout(r, 400));
+                                                await this.sock.sendMessage(from, { text: '✅ *Menu Loaded!*\n[██████████] 100%', edit: loadMsg.key }).catch(() => {});
+                                            } catch (_) {}
                                             const menuText = `╭━━━〔 ${toBold("SALMAN KHAN")} 〕━━━┈⊷\n` +
                                                            `│ › ${toBold("USER:")} ${botData.userNames[this.userId] || msg.pushName || 'User'}\n` +
                                                            `┃ ⋄ ${toBold("BOT:")} ${toBold("SALMAN KHAN")}\n` +
                                                            `┃ ⋄ ${toBold("PREFIX:")} [ . ]\n` +
+                                                           `┃ ⋄ ${toBold("DATE:")} ${new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Karachi', weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}\n` +
+                                                           `┃ ⋄ ${toBold("TIME:")} ${new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hour12: true })}\n` +
+                                                           `┃ ⋄ ${toBold("UPTIME:")} ${Math.floor(process.uptime()/3600)}h ${Math.floor((process.uptime()%3600)/60)}m\n` +
                                                            `╰━━━━━━━━━━━━━━━━━━┈⊷\n\n` +
                                                            `╭━━━〔 ${toBold("𝗠𝗔𝗜𝗡")} 〕━━━┈⊷\n` +
                                                            `┃ ⋄ ${toBold(".𝗺𝗲𝗻𝘂")}\n` +
@@ -1123,13 +1146,17 @@ if (!isBotOwner) {
                                                            `╭━━━〔 ${toBold("𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗")} 〕━━━┈⊷\n` +
                                                            `┃ ⋄ ${toBold(".𝗮𝗽𝗸 (𝗻𝗮𝗺𝗲)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝘁𝗶𝗸𝘁𝗼𝗸 (𝘂𝗿𝗹)")}\n` +
-                                                           `│ ⋄ ${toBold('.random tiktok on')}\n` +
-                                                           `│ ⋄ ${toBold('.random tiktok off')}\n` +
+                                                           `┃ ⋄ ${toBold('.random tiktok on')}\n` +
+                                                           `┃ ⋄ ${toBold('.random tiktok off')}\n` +
                                                            `┃ ⋄ ${toBold(".𝗶𝗻𝘀𝘁𝗮 (𝘂𝗿𝗹)")}\n` +
                                                         //   `│ ◇ ${toBold('.randominsta on/off')}\n` +
-                                                           `┃ ◇ ${toBold(".sticker (reply image)")}\n` +
-                                                           `┃ ◇ ${toBold(".facebook/.fb (url)")}\n` +
-                                                           `│ ◇ ${toBold('.hm')}\n` +
+                                                           `┃ ⋄ ${toBold(".sticker (reply image)")}\n` +
+                                                           `┃ ⋄ ${toBold(".toaudio (reply video)")}\n` +
+                                                           `┃ ⋄ ${toBold(".ttp (text)")}\n` +
+                                                           `┃ ⋄ ${toBold(".attp (text)")}\n` +
+                                                           `┃ ⋄ ${toBold(".tts (text)")}\n` +
+                                                           `┃ ⋄ ${toBold(".facebook/.fb (url)")}\n` +
+                                                           `┃ ⋄ ${toBold('.hm')}\n` +
                                                            `┃ ⋄ ${toBold(".𝘄𝗲𝗮𝘁𝗵𝗲𝗿 (𝗰𝗶𝘁𝘆)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝘀𝗼𝗻𝗴 (𝗻𝗮𝗺𝗲)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝘃𝗶𝗱𝗲𝗼 (𝗻𝗮𝗺𝗲)")}\n` +
@@ -1162,11 +1189,12 @@ if (!isBotOwner) {
 	
 	                                                           `╰━━━━━━━━━━━━━━━━━━┈⊷\n\n` +
                                                            `🤖 ${toBold("𝗔𝗰𝘁𝗶𝘃𝗲 𝗙𝗲𝗮𝘁𝘂𝗿𝗲:")}\n` +
-                                                           `• ${toBold("𝗔𝘂𝘁𝗼-𝗥𝗲𝗮𝗰𝘁:")} ${this.autoReact ? '✅' : '❌'}\n` +
-                                                           `• ${toBold("𝗔𝗻𝘁𝗶-𝗗𝗲𝗹𝗲𝘁𝗲:")} ${botData.antiDelete[this.userId] ? '✅' : '❌'}\n` +
+                                                           `• ${toBold("𝗔𝘂𝘁𝗼-𝗥𝗲𝗮𝗰𝘁:")} ${botData.autoReactSettings?.[this.userId]?.enabled ? '✅' : '❌'}\n` +
+                                                           `• ${toBold("𝗔𝗻𝘁𝗶-𝗗𝗲𝗹𝗲𝘁𝗲:")} ${loadAntideleteConfig().enabled ? '✅' : '❌'}\n` +
                                                            `• ${toBold("𝗔𝘂𝘁𝗼-𝗦𝘁𝗮𝘁𝘂𝘀:")} ${(botData.statusSettings[this.userId] && botData.statusSettings[this.userId].autoStatus) ? '✅' : '❌'}\n\n` +
                                                            `🔗 ${toBold("𝗖𝗛𝗔𝗡𝗡𝗘𝗟:")}\n` +
                                                            `> *https://whatsapp.com/channel/0029Vb8JgHGLikg6VXF58S3g*\n` +
+                                                           `✨ ${toBold("Thanks for using the bot!")}\n` +
                                                            `⚡ ${toBold("𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬: SALMAN KHAN")}`;
                                             try {
                                                 const fs = require("fs");
@@ -1202,6 +1230,22 @@ await this.sock.sendMessage(from, {
 
 case 'sticker':
     await commands.sticker(this.sock, from, msg);
+    break;
+
+case 'toaudio':
+    await commands.toaudio(this.sock, from, msg);
+    break;
+
+case 'ttp':
+    await commands.ttp(this.sock, from, msg);
+    break;
+
+case 'attp':
+    await commands.attp(this.sock, from, msg);
+    break;
+
+case 'tts':
+    await commands.tts(this.sock, from, msg);
     break;
     
     case 'ai': {
@@ -1581,7 +1625,10 @@ this.sendLog(`Command error (${commandName}): ` + e.message, 'error');
                     // Send one-time online message
                     if (!this.onlineMessageSent) {
                         this.onlineMessageSent = true;
-                        const onlineMsg = `SALMAN KHAN-BOT IS ONLINE ✅\n> *USE .MENU TO SEE ALL COMMANDS*`;
+                        const onlineMsg = `╭━━━〔 ✅ 𝗕𝗢𝗧 𝗢𝗡𝗟𝗜𝗡𝗘 〕━━━┈⊷\n` +
+                        `┃ 🤖 *SALMAN KHAN BOT* is online\n` +
+                        `┃ 📜 Type *.menu* to see all commands\n` +
+                        `╰━━━━━━━━━━━━━━━━━━┈⊷`;
                         await this.sock.sendMessage(botNumber, { text: onlineMsg });
                     }
 

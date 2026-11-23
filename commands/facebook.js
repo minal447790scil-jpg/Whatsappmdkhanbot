@@ -108,7 +108,7 @@ async function facebookCommand(sock, chatId, message) {
                 },
 
                 caption:
-                    "✅ FACEBOOK DOWNLOADED BY SALMAN"
+                    "✅ *FACEBOOK DOWNLOADED BY SALMAN KHAN*"
             },
             { quoted: message }
         );

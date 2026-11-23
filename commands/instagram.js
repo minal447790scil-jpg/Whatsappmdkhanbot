@@ -1,8 +1,94 @@
 
-const { igdl } = require("ruhend-scraper");
+const { igdl2 } = require("ruhend-scraper");
+const { getInfo } = require("@raihan07/vidly");
+
+// Media fetch: vidly aur igdl2 DONO ek sath (parallel) chalte hain —
+// jo pehle VALID media de de, wahi jeet jata hai. Pehle vidly akela
+// ~20s leta tha aur bar 20% par atki rehti thi. Dono par 30s timeout
+// hai taake koi backend hang ho to command hamesha ke liye na atke.
+// igdl2 ke sirf woh items valid hain jinka URL asal path rakhta ho
+// (wo kabhi kabhi "https://snapsave.app&dl=1" jaisa kata hua URL
+// de deta hai jo download nahi ho sakta).
+function withTimeout(promise, ms, name) {
+    let timer;
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            timer = setTimeout(
+                () => reject(new Error(name + " timeout (" + ms / 1000 + "s)")),
+                ms
+            );
+        })
+    ]).finally(() => clearTimeout(timer));
+}
+
+async function fetchInstagramMedia(cleanUrl) {
+    const fromVidly = (async () => {
+        const info = await withTimeout(getInfo(cleanUrl), 30000, "vidly");
+        const direct = info?.highQuality || info?.lowQuality;
+
+        if (typeof direct === "string" && /^https?:\/\//i.test(direct)) {
+            console.log("[IG] vidly: direct CDN link mila (race winner)");
+            return [{ url: direct, type: "video" }];
+        }
+
+        throw new Error("vidly: koi direct link nahi");
+    })();
+
+    const fromIgdl2 = (async () => {
+        const data = await withTimeout(igdl2(cleanUrl), 30000, "igdl2");
+        const items = Array.isArray(data?.data)
+            ? data.data
+            : Array.isArray(data)
+                ? data
+                : [];
+
+        const valid = items.filter((it) => {
+            const u = it?.url;
+            if (typeof u !== "string") return false;
+            try {
+                return new URL(u).pathname.length > 1;
+            } catch {
+                return false;
+            }
+        });
+
+        if (valid.length) {
+            console.log("[IG] igdl2: valid media mila (race winner)");
+            return valid;
+        }
+
+        throw new Error("igdl2: koi valid media nahi");
+    })();
+
+    try {
+        return await Promise.any([fromVidly, fromIgdl2]);
+    } catch (e) {
+        const reasons = (e?.errors || [])
+            .map((x) => x?.message || String(x))
+            .join(" | ");
+        console.log("[IG] dono fetchers fail:", reasons || e?.message || e);
+        throw new Error("Scraper failed: dono sources se media nahi mila");
+    }
+}
 
 async function instagramCommand(sock, chatId, message) {
     let downloadData = null;
+
+    // Animated status message (edit-in-place progress bar)
+    let statusKey = null;
+    let progressTimer = null;
+    const setStatus = async (text) => {
+        if (statusKey) {
+            await sock.sendMessage(chatId, { text, edit: statusKey }).catch(() => {});
+        }
+    };
+    const stopProgress = () => {
+        if (progressTimer) {
+            clearInterval(progressTimer);
+            progressTimer = null;
+        }
+    };
 
     try {
         // Extract message text
@@ -71,26 +157,54 @@ async function instagramCommand(sock, chatId, message) {
             react: { text: "📥", key: message.key }
         });
 
+        try {
+            const statusMsg = await sock.sendMessage(chatId, {
+                text: "📥 *Downloading...*\n[██░░░░░░░░] 20%"
+            }, { quoted: message });
+            statusKey = statusMsg.key;
+        } catch {}
+
+        // Fetch ke doran bar aahista aahista aage barhti rahe —
+        // warna lambi fetch par 20% par atki hui lagti hai
+        if (statusKey) {
+            const frames = [
+                "📥 *Downloading...*\n[███░░░░░░░] 30%",
+                "📥 *Downloading...*\n[████░░░░░░] 40%",
+                "📥 *Downloading...*\n[█████░░░░░] 50%",
+                "📥 *Downloading...*\n[██████░░░░] 60%"
+            ];
+            let fi = 0;
+            progressTimer = setInterval(() => {
+                setStatus(frames[fi % frames.length]);
+                fi++;
+            }, 1400);
+        }
+
         console.log("\n========== INSTAGRAM DOWNLOADER ==========");
         console.log("[IG] URL:", cleanUrl);
-        console.log("[IG] Calling ruhend-scraper igdl...");
+        console.log("[IG] Fetching media (vidly + igdl2 race)...");
 
         // Fetch media
         try {
-            downloadData = await igdl(cleanUrl);
+            downloadData = await fetchInstagramMedia(cleanUrl);
         } catch (err) {
-            console.error("[IG] igdl failed:", err);
+            stopProgress();
+            console.error("[IG] scraper failed:", err);
             console.error("[IG] Stack:", err?.stack);
 
             throw new Error(
                 `Scraper failed: ${err?.message || String(err)}`
             );
         }
+        stopProgress();
 
         console.log(
             "[IG] Raw response:",
             JSON.stringify(downloadData, null, 2)
         );
+
+        await setStatus("🎬 *Sending...*\n[███████░░░] 70%");
+        await new Promise(r => setTimeout(r, 700));
 
         // Normalize result
         let mediaList = [];
@@ -168,7 +282,7 @@ async function instagramCommand(sock, chatId, message) {
                         chatId,
                         {
                             image: { url: mediaUrl },
-                            caption: "✅ DOWNLOADED BY SALMAN"
+                            caption: "✅ *DOWNLOADED BY SALMAN KHAN*"
                         },
                         { quoted: message }
                     );
@@ -177,7 +291,7 @@ async function instagramCommand(sock, chatId, message) {
                         chatId,
                         {
                             video: { url: mediaUrl },
-                            caption: "✅ DOWNLOADED BY SALMAN"
+                            caption: "✅ *DOWNLOADED BY SALMAN KHAN*"
                         },
                         { quoted: message }
                     );
@@ -199,12 +313,17 @@ async function instagramCommand(sock, chatId, message) {
             react: { text: "✅", key: message.key }
         });
 
+        await setStatus("✅ *Downloaded!*\n[██████████] 100%");
+
         console.log(`[IG] Success. Sent ${sent} media item(s).`);
         console.log("==========================================\n");
 
     } catch (err) {
+        stopProgress();
         console.error("[IG] COMMAND ERROR:", err);
         console.error("[IG] Stack:", err?.stack);
+
+        await setStatus("❌ *Download failed*");
 
         try {
             await sock.sendMessage(

@@ -1,8 +1,45 @@
 const { ttdl } = require("ruhend-scraper");
 
+// ttdl kabhi hang ho jata hai — 30s timeout taake command atki na rahe
+function withTimeout(promise, ms, name) {
+    let timer;
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            timer = setTimeout(
+                () => reject(new Error(name + " timeout (" + ms / 1000 + "s)")),
+                ms
+            );
+        })
+    ]).finally(() => clearTimeout(timer));
+}
+
 async function tiktokCommand(sock, chatId, message) {
 
-    let downloadData;
+    // Animated status message (IG wali tarah) — fetch ke doran bar
+    // chalti rehti hai; fail ho to status khamoshi se delete (is
+    // command ka purana silent behavior barqarar), success par 100%.
+    let statusKey = null;
+    let progressTimer = null;
+
+    const setStatus = async (text) => {
+        if (statusKey) {
+            await sock.sendMessage(chatId, { text, edit: statusKey }).catch(() => {});
+        }
+    };
+    const stopProgress = () => {
+        if (progressTimer) {
+            clearInterval(progressTimer);
+            progressTimer = null;
+        }
+    };
+    const dropStatus = async () => {
+        stopProgress();
+        if (statusKey) {
+            await sock.sendMessage(chatId, { delete: statusKey }).catch(() => {});
+            statusKey = null;
+        }
+    };
 
     try {
 
@@ -44,8 +81,38 @@ async function tiktokCommand(sock, chatId, message) {
         });
 
 
-        downloadData =
-            await ttdl(query);
+        try {
+            const statusMsg = await sock.sendMessage(chatId, {
+                text: "📥 *Downloading...*\n[██░░░░░░░░] 20%"
+            }, { quoted: message });
+            statusKey = statusMsg.key;
+        } catch {}
+
+        if (statusKey) {
+            const frames = [
+                "📥 *Downloading...*\n[███░░░░░░░] 30%",
+                "📥 *Downloading...*\n[████░░░░░░] 40%",
+                "📥 *Downloading...*\n[█████░░░░░] 50%",
+                "📥 *Downloading...*\n[██████░░░░] 60%"
+            ];
+            let fi = 0;
+            progressTimer = setInterval(() => {
+                setStatus(frames[fi % frames.length]);
+                fi++;
+            }, 1400);
+        }
+
+
+        let downloadData;
+
+        try {
+            downloadData =
+                await withTimeout(ttdl(query), 30000, "ttdl");
+        } catch (e) {
+            await dropStatus();
+            return; // second bot silent
+        }
+        stopProgress();
 
 
         let videoUrl;
@@ -78,9 +145,12 @@ async function tiktokCommand(sock, chatId, message) {
             !videoUrl ||
             !videoUrl.startsWith("http")
         ) {
+            await dropStatus();
             return; // second bot silent
         }
 
+
+        await setStatus("🎬 *Sending...*\n[███████░░░] 70%");
 
         await sock.sendMessage(
             chatId,
@@ -90,7 +160,7 @@ async function tiktokCommand(sock, chatId, message) {
                 },
 
                 caption:
-                "✅ TIKTOK DOWNLOADED BY SALMAN"
+                "✅ *TIKTOK DOWNLOADED BY SALMAN KHAN*"
             },
             { quoted: message }
         );
@@ -103,10 +173,13 @@ async function tiktokCommand(sock, chatId, message) {
             }
         });
 
+        await setStatus("✅ *Downloaded!*\n[██████████] 100%");
+
 
     } catch (e) {
 
         // region / second session errors hide
+        await dropStatus().catch(() => {});
         return;
 
     }
