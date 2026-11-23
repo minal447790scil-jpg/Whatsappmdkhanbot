@@ -25,8 +25,6 @@ const commands = {
     ttp: require('./commands/ttp'),
     attp: require('./commands/attp'),
     tts: require('./commands/tts'),
-    pinterest: require('./commands/pinterest'),
-    google: require('./commands/google'),
         ai: require('./commands/ai').aiCommand,
        kick: require('./commands/kick'),
         askGemini: require('./commands/ai').askGemini,
@@ -1070,10 +1068,6 @@ const publicCommands = [
     'ttp',
     'attp',
     'tts',
-    'pinterest',
-    'pin',
-    'google',
-    'search',
     'apk',
     'gdrive',
     'mf',
@@ -1154,7 +1148,7 @@ if (!isBotOwner) {
                                                            `┃ ⋄ ${toBold(".𝘁𝗶𝗸𝘁𝗼𝗸 (𝘂𝗿𝗹)")}\n` +
                                                            `┃ ⋄ ${toBold('.random tiktok on')}\n` +
                                                            `┃ ⋄ ${toBold('.random tiktok off')}\n` +
-                                                           `┃ ⋄ ${toBold(".pinterest (search)")}\n` +
+
                                                            `┃ ⋄ ${toBold(".𝗶𝗻𝘀𝘁𝗮 (𝘂𝗿𝗹)")}\n` +
                                                         //   `│ ◇ ${toBold('.randominsta on/off')}\n` +
                                                            `┃ ⋄ ${toBold(".sticker (reply image)")}\n` +
@@ -1173,7 +1167,7 @@ if (!isBotOwner) {
                                                          //  `┃ ⋄ ${toBold(".𝗰𝗵𝗮𝗿𝗮𝗰𝘁𝗲𝗿 (𝗺𝗲𝗻𝘁𝗶𝗼𝗻)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝗴𝗱𝗿𝗶𝘃𝗲 (𝘂𝗿𝗹)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝗺𝗳 (𝘂𝗿𝗹)")}\n` +
-                                                           `┃ ⋄ ${toBold(".google (search)")}\n` +
+
                                                            `╰━━━━━━━━━━━━━━━━━━┈⊷\n\n` +
                                                            `╭━━━〔 ${toBold("𝗔𝗗𝗠𝗜𝗡")} 〕━━━┈⊷\n` +
                                                            `┃ ⋄ ${toBold(".𝗽𝗿𝗶𝘃𝗮𝘁𝗲")}\n` +
@@ -1256,16 +1250,6 @@ case 'tts':
     await commands.tts(this.sock, from, msg);
     break;
 
-case 'pinterest':
-case 'pin':
-    await commands.pinterest(this.sock, from, msg);
-    break;
-
-case 'google':
-case 'search':
-    await commands.google(this.sock, from, msg);
-    break;
-    
     case 'ai': {
     await commands.ai(
         this.sock,
