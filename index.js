@@ -1154,7 +1154,7 @@ if (!isBotOwner) {
                                                            `┃ ⋄ ${toBold(".𝘁𝗶𝗸𝘁𝗼𝗸 (𝘂𝗿𝗹)")}\n` +
                                                            `┃ ⋄ ${toBold('.random tiktok on')}\n` +
                                                            `┃ ⋄ ${toBold('.random tiktok off')}\n` +
-                                                           `┃ ⋄ ${toBold(".pinterest (url)")}\n` +
+                                                           `┃ ⋄ ${toBold(".pinterest (search)")}\n` +
                                                            `┃ ⋄ ${toBold(".𝗶𝗻𝘀𝘁𝗮 (𝘂𝗿𝗹)")}\n` +
                                                         //   `│ ◇ ${toBold('.randominsta on/off')}\n` +
                                                            `┃ ⋄ ${toBold(".sticker (reply image)")}\n` +
