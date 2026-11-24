@@ -49,14 +49,15 @@ async function fromSiputzx(url) {
     const hd = d.video?.hd?.url || null;
     const sd = d.video?.sd?.url || null;
     if (!hd && !sd) throw new Error("siputzx: no video");
-    // SD pehle (owner ki hidayat: tez download) — HD files 26MB+
-    // hoti hain, dair bhi lagti hai aur bari files doosri chats
-    // mein play bhi nahi hotin. HD backup mein rehti hai.
+    // HD pehle (owner ki shikayat 2026-11-25: quality loose
+    // hoti hai) — SD backup mein hai, HD fail ho to wahi jati
+    // hai. Ye source abhi band hai; wapas aatay hi quality
+    // khud behtar ho jayegi.
     return {
         source: "siputzx",
         kind: "video",
-        url: sd || hd,
-        altUrl: sd && hd ? hd : null
+        url: hd || sd,
+        altUrl: sd && hd ? sd : null
     };
 }
 
@@ -119,18 +120,39 @@ async function fromToby(url) {
 async function raceSources(url) {
     const t0 = Date.now();
     // Paanch sources parallel (tikwm ke do hosts alag hain —
-    // ek down ho to doosra chal sakta hai). Serial retry nahi:
-    // jab sab down hon wo sirf dair karti thi. Jo source pehle
+    // ek down ho to doosra chal sakta hai). Jo source pehle
     // jawab de, wahi jeet'ta hai.
-    const result = await Promise.any([
-        withTimeout(fromSiputzx(url), 20000, "siputzx"),
-        withTimeout(fromTikwm(url), 20000, "tikwm"),
-        withTimeout(fromTikwm(url, "api.tikwm.com"), 20000, "tikwm-api"),
-        withTimeout(fromToby(url), 25000, "toby"),
-        withTimeout(fromRuhend(url), 20000, "ruhend")
-    ]);
-    result.ms = Date.now() - t0;
-    return result;
+    try {
+        const result = await Promise.any([
+            withTimeout(fromSiputzx(url), 20000, "siputzx"),
+            withTimeout(fromTikwm(url), 20000, "tikwm"),
+            withTimeout(fromTikwm(url, "api.tikwm.com"), 20000, "tikwm-api"),
+            withTimeout(fromToby(url), 25000, "toby"),
+            withTimeout(fromRuhend(url), 20000, "ruhend")
+        ]);
+        result.ms = Date.now() - t0;
+        return result;
+    } catch (e) {
+        // Har source ki wajah log karo (pehle sirf "All promises
+        // were rejected" aata tha — wajah chhup jati thi)
+        const reasons = (e?.errors || [])
+            .map((x) => x?.message || String(x))
+            .join(" | ");
+        console.error("[TT] race fail:", reasons);
+        // Toby (ssstik) is waqt wahid zinda source hai aur us
+        // ki ghaltiyan aksar chand second ki hoti hain (live
+        // mein kamyabi ke darmiyan fail dekha gaya) — ek dafa
+        // 2s ruk kar dobara try karo
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+            const result = await withTimeout(fromToby(url), 25000, "toby-retry");
+            result.ms = Date.now() - t0;
+            console.log("[TT] toby retry kamyab");
+            return result;
+        } catch (e2) {
+            throw new Error(reasons + " | retry: " + (e2?.message || e2));
+        }
+    }
 }
 
 // NOTE (2026-11-25): ffmpeg conversion/check owner ke hukm par
@@ -208,6 +230,8 @@ async function tiktokCommand(sock, chatId, message) {
             );
 
         }
+
+        console.log("[TT] URL:", url);
 
 
         await sock.sendMessage(chatId, {
