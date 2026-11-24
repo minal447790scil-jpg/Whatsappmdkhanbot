@@ -1,15 +1,5 @@
 const axios = require("axios");
 const { ttdl } = require("ruhend-scraper");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { execFile } = require("child_process");
-
-const ffmpegStaticPath = require("ffmpeg-static");
-const ffmpegPath =
-    ffmpegStaticPath && fs.existsSync(ffmpegStaticPath)
-        ? ffmpegStaticPath
-        : "ffmpeg";
 
 // Koi source hang ho jaye to timeout — command atki na rahe
 function withTimeout(promise, ms, name) {
@@ -132,49 +122,9 @@ async function raceSources(url) {
     }
 }
 
-// PLAYBACK CHECK (2026-11-25, halki surat): bari HD files aur
-// ajeeb formats doosri chats mein play nahi hotay thay. Pehle
-// convert karne wali surat bohat slow thi (video hi nahi aati
-// thi), is liye ab sirf CHECK hai, conversion nahi: SD file
-// pehle aati hai (chhoti + aam taur par H.264), format theek
-// ho to wahi, warna HD ki bari — aur dono hi theek na hon to
-// SD waisi ki waisi (video aana, dair se aana se behtar hai).
-function probeInfo(file) {
-    return new Promise((resolve) => {
-        execFile(
-            ffmpegPath,
-            ["-i", file],
-            { timeout: 15000 },
-            (err, stdout, stderr) => resolve(String(stderr || ""))
-        );
-    });
-}
-
-function isPlayable(info) {
-    const v = /Video: ([a-z0-9]+)/i.exec(info)?.[1]?.toLowerCase();
-    const a = /Audio: ([a-z0-9]+)/i.exec(info)?.[1]?.toLowerCase();
-    const pixOk = /yuv420p(?![0-9])/i.test(info);
-    return { ok: v === "h264" && pixOk && (!a || a === "aac"), v, a };
-}
-
-async function probePlayable(buf) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-"));
-    const inF = path.join(dir, "in.mp4");
-    try {
-        fs.writeFileSync(inF, buf);
-        const p = isPlayable(await probeInfo(inF));
-        console.log(
-            `[TT] probe: video=${p.v || "?"} audio=${p.a || "none"} ok=${p.ok}`
-        );
-        return p.ok;
-    } catch (e) {
-        return false;
-    } finally {
-        try {
-            fs.rmSync(dir, { recursive: true, force: true });
-        } catch {}
-    }
-}
+// NOTE (2026-11-25): ffmpeg conversion/check owner ke hukm par
+// mukammal hata di gayi hai — us se video late aati thi. Ab
+// koi check nahi: SD buffer seedha bhejta hai.
 
 // Video pehle khud buffer mein download karo, phir bhejo —
 // WhatsApp/Baileys ka apna URL fetcher kuch CDN links par fail
@@ -322,13 +272,11 @@ async function tiktokCommand(sock, chatId, message) {
             }
             if (!sent) throw new Error("slideshow: koi image nahi gayi");
         } else {
-            // Video — SD pehle buffer mein; format check ke sath
-            // jo candidate theek ho wahi bhejo. Dono hi check
-            // fail karein to SD waisi ki waisi (video aana sab
-            // se aham hai). Akhri sahara seedha URL-send.
+            // Video — SD pehle buffer mein, fail ho to HD buffer,
+            // akhri sahara seedha URL-send. Koi ffmpeg check
+            // nahi (owner ke hukm par hata di — dair hoti thi).
             let sent = false;
             let lastErr = null;
-            let firstBuf = null;
 
             const sendBuf = async (buf) => {
                 await sock.sendMessage(
@@ -350,23 +298,10 @@ async function tiktokCommand(sock, chatId, message) {
                 if (!candidate || sent) continue;
                 try {
                     const buf = await fetchBuffer(candidate);
-                    if (!firstBuf) firstBuf = buf;
-                    if (await probePlayable(buf)) {
-                        await sendBuf(buf);
-                    }
+                    await sendBuf(buf);
                 } catch (e) {
                     lastErr = e;
                     console.error("[TT] buffer send fail:", e?.message || e);
-                }
-            }
-
-            if (!sent && firstBuf) {
-                try {
-                    console.log("[TT] format verify na hua — pehla (SD) buffer as-is");
-                    await sendBuf(firstBuf);
-                } catch (e) {
-                    lastErr = e;
-                    console.error("[TT] as-is send fail:", e?.message || e);
                 }
             }
 
@@ -417,4 +352,3 @@ async function tiktokCommand(sock, chatId, message) {
 module.exports = tiktokCommand;
 module.exports.raceSources = raceSources;
 module.exports.extractUrl = extractUrl;
-module.exports.probePlayable = probePlayable;
