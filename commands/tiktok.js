@@ -59,8 +59,8 @@ async function fromSiputzx(url) {
     };
 }
 
-async function fromTikwm(url) {
-    const { data } = await axios.get("https://www.tikwm.com/api/", {
+async function fromTikwm(url, host = "www.tikwm.com") {
+    const { data } = await axios.get(`https://${host}/api/`, {
         params: { url, hd: 1 },
         headers: { "User-Agent": "Mozilla/5.0" },
         timeout: 20000
@@ -98,28 +98,21 @@ async function fromRuhend(url) {
 
 async function raceSources(url) {
     const t0 = Date.now();
-    try {
-        const result = await Promise.any([
-            withTimeout(fromSiputzx(url), 25000, "siputzx"),
-            withTimeout(fromTikwm(url), 25000, "tikwm"),
-            withTimeout(fromRuhend(url), 25000, "ruhend")
-        ]);
-        result.ms = Date.now() - t0;
-        return result;
-    } catch (e) {
-        // Teeno ek sath fail aksar chand second ki kharabi hoti
-        // hai (siputzx 503/502 deta hai) — sab se tez source ko
-        // ek dafa aur try karo, phir haar mano
-        console.error(
-            "[TT] race fail, siputzx retry:",
-            (e?.errors || [e]).map((x) => x?.message || String(x)).join(" | ")
-        );
-        await new Promise((r) => setTimeout(r, 1500));
-        const result = await withTimeout(fromSiputzx(url), 15000, "siputzx-retry");
-        result.ms = Date.now() - t0;
-        console.log("[TT] siputzx retry kamyab");
-        return result;
-    }
+    // Chaar sources parallel (tikwm ke do hosts alag hain — ek
+    // down ho to doosra chal sakta hai). Serial retry HATA di:
+    // jab sab sources down hon (jaisay 2026-11-25 ki raat TikTok
+    // ki saari free APIs ek sath band theen) wo sirf 17 second
+    // aur dair karti thi, video phir bhi nahi aati thi. Ab fail
+    // bhi tez hota hai aur jo source pehle wapas aaye, race
+    // usay foran pakar leti hai.
+    const result = await Promise.any([
+        withTimeout(fromSiputzx(url), 20000, "siputzx"),
+        withTimeout(fromTikwm(url), 20000, "tikwm"),
+        withTimeout(fromTikwm(url, "api.tikwm.com"), 20000, "tikwm-api"),
+        withTimeout(fromRuhend(url), 20000, "ruhend")
+    ]);
+    result.ms = Date.now() - t0;
+    return result;
 }
 
 // NOTE (2026-11-25): ffmpeg conversion/check owner ke hukm par
