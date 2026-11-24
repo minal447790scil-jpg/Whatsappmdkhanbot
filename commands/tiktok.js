@@ -117,17 +117,62 @@ async function fromToby(url) {
     return { source: "toby", kind: "video", url: v };
 }
 
+// MusicalDown (toby v3) — is ke paas asal HD hai: live test
+// mein videoHD 1080x1920 mili jabke ssstik wali file sirf
+// 576x1024 thi (owner ki quality wali shikayat ki wajah yahi
+// thi). HD pehle, SD backup.
+async function fromMusical(url) {
+    const r = await tobyDownloader(url, { version: "v3" });
+    if (r?.status !== "success" || !r?.result) {
+        throw new Error("musicaldown: fail");
+    }
+    const res = r.result;
+    if (Array.isArray(res.images) && res.images.length) {
+        return { source: "musicaldown", kind: "images", urls: res.images.slice(0, 10) };
+    }
+    const hd = res.videoHD || null;
+    const sd = res.videoSD || null;
+    if (!hd && !sd) throw new Error("musicaldown: no video");
+    return {
+        source: "musicaldown",
+        kind: "video",
+        url: hd || sd,
+        altUrl: hd && sd ? sd : null
+    };
+}
+
 async function raceSources(url) {
     const t0 = Date.now();
-    // Paanch sources parallel (tikwm ke do hosts alag hain —
-    // ek down ho to doosra chal sakta hai). Jo source pehle
-    // jawab de, wahi jeet'ta hai.
+    // PEHLA ROUND — HD sources (owner: quality sab se aham
+    // hai). 15 second ki hadd: in mein se koi zinda ho to HD
+    // wahi se aati hai, koi na ho to dair kiye baghair backup
+    // round par gir jao.
+    try {
+        const result = await withTimeout(
+            Promise.any([
+                withTimeout(fromSiputzx(url), 20000, "siputzx"),
+                withTimeout(fromTikwm(url), 20000, "tikwm"),
+                withTimeout(fromTikwm(url, "api.tikwm.com"), 20000, "tikwm-api"),
+                withTimeout(fromMusical(url), 25000, "musicaldown")
+            ]),
+            15000,
+            "hd-round"
+        );
+        result.ms = Date.now() - t0;
+        return result;
+    } catch (e) {
+        console.error(
+            "[TT] HD round fail — backup round:",
+            (e?.errors || [e]).map((x) => x?.message || String(x)).join(" | ") ||
+                e?.message ||
+                e
+        );
+    }
+    // DOOSRA ROUND — jo chal jaye wahi (toby/ssstik waghera)
     try {
         const result = await Promise.any([
-            withTimeout(fromSiputzx(url), 20000, "siputzx"),
-            withTimeout(fromTikwm(url), 20000, "tikwm"),
-            withTimeout(fromTikwm(url, "api.tikwm.com"), 20000, "tikwm-api"),
             withTimeout(fromToby(url), 25000, "toby"),
+            withTimeout(fromMusical(url), 25000, "musicaldown"),
             withTimeout(fromRuhend(url), 20000, "ruhend")
         ]);
         result.ms = Date.now() - t0;
@@ -388,3 +433,4 @@ module.exports = tiktokCommand;
 module.exports.raceSources = raceSources;
 module.exports.extractUrl = extractUrl;
 module.exports.fromToby = fromToby;
+module.exports.fromMusical = fromMusical;
