@@ -1,6 +1,22 @@
 
 const { igdl2 } = require("ruhend-scraper");
 const { getInfo } = require("@raihan07/vidly");
+const axios = require("axios");
+
+// Media pehle khud buffer mein download karke bhejo — seedha
+// URL-send WhatsApp ke fetcher par chhuta tha jo kuch CDN links
+// par khamoshi se fail ho jata tha (video aata hi nahi tha).
+// Buffer fail ho to URL-send akhri sahara hai.
+async function fetchBuffer(url, maxMB = 64) {
+    const res = await axios.get(url, {
+        responseType: "arraybuffer",
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeout: 45000,
+        maxContentLength: maxMB * 1024 * 1024,
+        maxBodyLength: maxMB * 1024 * 1024
+    });
+    return Buffer.from(res.data);
+}
 
 // Media fetch: vidly aur igdl2 DONO ek sath (parallel) chalte hain —
 // jo pehle VALID media de de, wahi jeet jata hai. Pehle vidly akela
@@ -177,7 +193,7 @@ async function instagramCommand(sock, chatId, message) {
             progressTimer = setInterval(() => {
                 setStatus(frames[fi % frames.length]);
                 fi++;
-            }, 1400);
+            }, 400);
         }
 
         console.log("\n========== INSTAGRAM DOWNLOADER ==========");
@@ -277,24 +293,45 @@ async function instagramCommand(sock, chatId, message) {
                     mediaUrl
                 );
 
-                if (isImage) {
+                // Pehle buffer, phir URL (akhri sahara)
+                let delivered = false;
+                try {
+                    const buf = await fetchBuffer(mediaUrl);
                     await sock.sendMessage(
                         chatId,
-                        {
-                            image: { url: mediaUrl },
-                            caption: "✅ *DOWNLOADED BY SALMAN KHAN*"
-                        },
+                        isImage
+                            ? {
+                                  image: buf,
+                                  caption: "✅ *DOWNLOADED BY SALMAN KHAN*"
+                              }
+                            : {
+                                  video: buf,
+                                  mimetype: "video/mp4",
+                                  caption: "✅ *DOWNLOADED BY SALMAN KHAN*"
+                              },
                         { quoted: message }
                     );
-                } else {
+                    delivered = true;
+                    console.log("[IG] sent via buffer");
+                } catch (bufErr) {
+                    console.error("[IG] buffer send fail:", bufErr?.message || bufErr);
+                }
+
+                if (!delivered) {
                     await sock.sendMessage(
                         chatId,
-                        {
-                            video: { url: mediaUrl },
-                            caption: "✅ *DOWNLOADED BY SALMAN KHAN*"
-                        },
+                        isImage
+                            ? {
+                                  image: { url: mediaUrl },
+                                  caption: "✅ *DOWNLOADED BY SALMAN KHAN*"
+                              }
+                            : {
+                                  video: { url: mediaUrl },
+                                  caption: "✅ *DOWNLOADED BY SALMAN KHAN*"
+                              },
                         { quoted: message }
                     );
+                    console.log("[IG] sent via url fallback");
                 }
 
                 sent++;
@@ -313,7 +350,8 @@ async function instagramCommand(sock, chatId, message) {
             react: { text: "✅", key: message.key }
         });
 
-        await setStatus("✅ *Downloaded!*\n[██████████] 100%");
+        // TikTok ki tarah: sirf mukammal bar, "Downloaded" lafz nahi
+        await setStatus("[██████████] 100%");
 
         console.log(`[IG] Success. Sent ${sent} media item(s).`);
         console.log("==========================================\n");
@@ -323,26 +361,10 @@ async function instagramCommand(sock, chatId, message) {
         console.error("[IG] COMMAND ERROR:", err);
         console.error("[IG] Stack:", err?.stack);
 
+        // Chat saaf rakho: bara error paragraph nahi — sirf ek
+        // line ka fail note status mein (delete bhi nahi hota),
+        // asal wajah logs mein hai
         await setStatus("❌ *Download failed*");
-
-        try {
-            await sock.sendMessage(
-                chatId,
-                {
-                    text:
-                        "❌ Instagram Error\n\n" +
-                        `${err?.message || String(err)}\n\n` +
-                        "Possible causes:\n" +
-                        "• Private, deleted or unsupported post\n" +
-                        "• Instagram changed its response\n" +
-                        "• Scraper/API failure\n\n" +
-                        "Check terminal logs for details."
-                },
-                { quoted: message }
-            );
-        } catch (sendErr) {
-            console.error("[IG] Could not send error message:", sendErr);
-        }
 
         try {
             await sock.sendMessage(chatId, {

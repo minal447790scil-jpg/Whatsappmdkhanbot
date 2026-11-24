@@ -58,7 +58,15 @@ async function fromSiputzx(url) {
     const hd = d.video?.hd?.url || null;
     const sd = d.video?.sd?.url || null;
     if (!hd && !sd) throw new Error("siputzx: no video");
-    return { source: "siputzx", kind: "video", url: hd || sd, altUrl: sd };
+    // SD pehle (owner ki hidayat: tez download) — HD files 26MB+
+    // hoti hain, dair bhi lagti hai aur bari files doosri chats
+    // mein play bhi nahi hotin. HD backup mein rehti hai.
+    return {
+        source: "siputzx",
+        kind: "video",
+        url: sd || hd,
+        altUrl: sd && hd ? hd : null
+    };
 }
 
 async function fromTikwm(url) {
@@ -100,21 +108,37 @@ async function fromRuhend(url) {
 
 async function raceSources(url) {
     const t0 = Date.now();
-    const result = await Promise.any([
-        withTimeout(fromSiputzx(url), 25000, "siputzx"),
-        withTimeout(fromTikwm(url), 25000, "tikwm"),
-        withTimeout(fromRuhend(url), 25000, "ruhend")
-    ]);
-    result.ms = Date.now() - t0;
-    return result;
+    try {
+        const result = await Promise.any([
+            withTimeout(fromSiputzx(url), 25000, "siputzx"),
+            withTimeout(fromTikwm(url), 25000, "tikwm"),
+            withTimeout(fromRuhend(url), 25000, "ruhend")
+        ]);
+        result.ms = Date.now() - t0;
+        return result;
+    } catch (e) {
+        // Teeno ek sath fail aksar chand second ki kharabi hoti
+        // hai (siputzx 503/502 deta hai) — sab se tez source ko
+        // ek dafa aur try karo, phir haar mano
+        console.error(
+            "[TT] race fail, siputzx retry:",
+            (e?.errors || [e]).map((x) => x?.message || String(x)).join(" | ")
+        );
+        await new Promise((r) => setTimeout(r, 1500));
+        const result = await withTimeout(fromSiputzx(url), 15000, "siputzx-retry");
+        result.ms = Date.now() - t0;
+        console.log("[TT] siputzx retry kamyab");
+        return result;
+    }
 }
 
-// PLAYBACK SHIELD (2026-11-25): kuch sources ki video aisi
-// format (HEVC/10-bit waghera) mein hoti hai jo download to ho
-// jati hai lekin WhatsApp mein play nahi hoti — khaas taur par
-// doosri chats mein. Bhejne se pehle har video check hoti hai:
-// format mehfooz (H.264 + yuv420p + AAC) ho to foran, warna
-// ffmpeg se usi format mein convert karke bhejte hain.
+// PLAYBACK CHECK (2026-11-25, halki surat): bari HD files aur
+// ajeeb formats doosri chats mein play nahi hotay thay. Pehle
+// convert karne wali surat bohat slow thi (video hi nahi aati
+// thi), is liye ab sirf CHECK hai, conversion nahi: SD file
+// pehle aati hai (chhoti + aam taur par H.264), format theek
+// ho to wahi, warna HD ki bari — aur dono hi theek na hon to
+// SD waisi ki waisi (video aana, dair se aana se behtar hai).
 function probeInfo(file) {
     return new Promise((resolve) => {
         execFile(
@@ -133,51 +157,18 @@ function isPlayable(info) {
     return { ok: v === "h264" && pixOk && (!a || a === "aac"), v, a };
 }
 
-function transcodeFile(inFile, outFile) {
-    return new Promise((resolve, reject) => {
-        execFile(
-            ffmpegPath,
-            [
-                "-y",
-                "-i", inFile,
-                "-vf", "scale='min(720,iw)':-2",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-profile:v", "high",
-                "-level", "4.0",
-                "-preset", "veryfast",
-                "-crf", "23",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-movflags", "+faststart",
-                outFile
-            ],
-            { timeout: 180000, maxBuffer: 1024 * 1024 * 16 },
-            (err) => (err ? reject(err) : resolve())
-        );
-    });
-}
-
-async function ensurePlayable(buf) {
+async function probePlayable(buf) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-"));
     const inF = path.join(dir, "in.mp4");
-    const outF = path.join(dir, "out.mp4");
     try {
         fs.writeFileSync(inF, buf);
         const p = isPlayable(await probeInfo(inF));
-        if (p.ok) {
-            console.log("[TT] format ok (h264) — direct send");
-            return buf;
-        }
         console.log(
-            `[TT] format risky (video=${p.v || "?"} audio=${p.a || "none"}) — converting`
+            `[TT] probe: video=${p.v || "?"} audio=${p.a || "none"} ok=${p.ok}`
         );
-        await transcodeFile(inF, outF);
-        const out = fs.readFileSync(outF);
-        return out.length ? out : buf;
+        return p.ok;
     } catch (e) {
-        console.error("[TT] playable-convert fail:", e?.message || e);
-        return buf;
+        return false;
     } finally {
         try {
             fs.rmSync(dir, { recursive: true, force: true });
@@ -219,12 +210,12 @@ async function tiktokCommand(sock, chatId, message) {
             progressTimer = null;
         }
     };
-    const dropStatus = async () => {
+    // Fail par status DELETE nahi hota (owner ko yahi shikayat
+    // thi) — ek line ka fail note reh jata hai, video aaye to
+    // status 100% bar ban jata hai
+    const failStatus = async () => {
         stopProgress();
-        if (statusKey) {
-            await sock.sendMessage(chatId, { delete: statusKey }).catch(() => {});
-            statusKey = null;
-        }
+        await setStatus("❌ *Download failed*");
     };
 
     try {
@@ -293,13 +284,10 @@ async function tiktokCommand(sock, chatId, message) {
         try {
             winner = await raceSources(url);
         } catch (e) {
-            // Chat mein khamoshi (purana behavior), lekin logs mein
-            // wajah lazmi — taake fail nazar aaye, ghayb na ho
-            console.error(
-                "[TT] ALL SOURCES FAILED:",
-                (e?.errors || [e]).map((x) => x?.message || String(x)).join(" | ")
-            );
-            await dropStatus();
+            // Wajah logs mein lazmi — taake fail nazar aaye,
+            // ghayb na ho; chat mein sirf ek line ka fail note
+            console.error("[TT] ALL SOURCES FAILED:", e?.message || e);
+            await failStatus();
             return;
         }
         stopProgress();
@@ -334,32 +322,51 @@ async function tiktokCommand(sock, chatId, message) {
             }
             if (!sent) throw new Error("slideshow: koi image nahi gayi");
         } else {
-            // Video — pehle buffer, phir (SD par) dobara, akhri
-            // sahara seedha URL-send
+            // Video — SD pehle buffer mein; format check ke sath
+            // jo candidate theek ho wahi bhejo. Dono hi check
+            // fail karein to SD waisi ki waisi (video aana sab
+            // se aham hai). Akhri sahara seedha URL-send.
             let sent = false;
             let lastErr = null;
+            let firstBuf = null;
+
+            const sendBuf = async (buf) => {
+                await sock.sendMessage(
+                    chatId,
+                    {
+                        video: buf,
+                        mimetype: "video/mp4",
+                        caption: "✅ *TIKTOK DOWNLOADED BY SALMAN KHAN*"
+                    },
+                    { quoted: message }
+                );
+                sent = true;
+                console.log(
+                    `[TT] sent via buffer (${(buf.length / 1048576).toFixed(1)}MB)`
+                );
+            };
 
             for (const candidate of [winner.url, winner.altUrl]) {
                 if (!candidate || sent) continue;
                 try {
                     const buf = await fetchBuffer(candidate);
-                    const playable = await ensurePlayable(buf);
-                    await sock.sendMessage(
-                        chatId,
-                        {
-                            video: playable,
-                            mimetype: "video/mp4",
-                            caption: "✅ *TIKTOK DOWNLOADED BY SALMAN KHAN*"
-                        },
-                        { quoted: message }
-                    );
-                    sent = true;
-                    console.log(
-                        `[TT] sent via buffer (${(playable.length / 1048576).toFixed(1)}MB)`
-                    );
+                    if (!firstBuf) firstBuf = buf;
+                    if (await probePlayable(buf)) {
+                        await sendBuf(buf);
+                    }
                 } catch (e) {
                     lastErr = e;
                     console.error("[TT] buffer send fail:", e?.message || e);
+                }
+            }
+
+            if (!sent && firstBuf) {
+                try {
+                    console.log("[TT] format verify na hua — pehla (SD) buffer as-is");
+                    await sendBuf(firstBuf);
+                } catch (e) {
+                    lastErr = e;
+                    console.error("[TT] as-is send fail:", e?.message || e);
                 }
             }
 
@@ -399,7 +406,7 @@ async function tiktokCommand(sock, chatId, message) {
     } catch (e) {
 
         console.error("[TT] FAILED:", e?.message || e);
-        await dropStatus().catch(() => {});
+        await failStatus().catch(() => {});
         return;
 
     }
@@ -410,4 +417,4 @@ async function tiktokCommand(sock, chatId, message) {
 module.exports = tiktokCommand;
 module.exports.raceSources = raceSources;
 module.exports.extractUrl = extractUrl;
-module.exports.ensurePlayable = ensurePlayable;
+module.exports.probePlayable = probePlayable;
