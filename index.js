@@ -1053,6 +1053,39 @@ if (commandName) {
                            
                              const isBotOwner = isOwner(sender) || msg.key.fromMe;
 
+// ==================================================
+// AUTO-DOWNLOAD (owner ki hidayat 2026-11-24): command ki
+// zaroorat nahi — jo link paste ho, bot khud pehchan kar
+// wahi downloader chala deta hai (TikTok / Insta / FB).
+// Owner har jagah; ghair-owner sirf public chat mein.
+// ==================================================
+if (!body.startsWith(prefix)) {
+    const autoMatch = body.match(/https?:\/\/[^\s]+/i);
+    const autoUrl = autoMatch ? autoMatch[0].replace(/[),.!]+$/, '') : null;
+    if (autoUrl) {
+        const canAuto = isBotOwner || (Array.isArray(botData.publicChats) && botData.publicChats.includes(from));
+        if (canAuto) {
+            const dlMsg = { ...msg, message: { conversation: autoUrl } };
+            try {
+                if (/tiktok\.com/i.test(autoUrl)) {
+                    await commands.tiktok(this.sock, from, dlMsg);
+                    return;
+                }
+                if (/instagram\.com/i.test(autoUrl)) {
+                    await commands.insta(this.sock, from, dlMsg);
+                    return;
+                }
+                if (/(?:facebook\.com|fb\.watch)/i.test(autoUrl)) {
+                    await commands.facebook(this.sock, from, dlMsg);
+                    return;
+                }
+            } catch (e) {
+                console.error('[AUTODL] error:', e?.message || e);
+            }
+        }
+    }
+}
+
 const publicCommands = [
     'menu',
     'ping',
