@@ -1,5 +1,15 @@
 const axios = require("axios");
 const { ttdl } = require("ruhend-scraper");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { execFile } = require("child_process");
+
+const ffmpegStaticPath = require("ffmpeg-static");
+const ffmpegPath =
+    ffmpegStaticPath && fs.existsSync(ffmpegStaticPath)
+        ? ffmpegStaticPath
+        : "ffmpeg";
 
 // Koi source hang ho jaye to timeout — command atki na rahe
 function withTimeout(promise, ms, name) {
@@ -97,6 +107,82 @@ async function raceSources(url) {
     ]);
     result.ms = Date.now() - t0;
     return result;
+}
+
+// PLAYBACK SHIELD (2026-11-25): kuch sources ki video aisi
+// format (HEVC/10-bit waghera) mein hoti hai jo download to ho
+// jati hai lekin WhatsApp mein play nahi hoti — khaas taur par
+// doosri chats mein. Bhejne se pehle har video check hoti hai:
+// format mehfooz (H.264 + yuv420p + AAC) ho to foran, warna
+// ffmpeg se usi format mein convert karke bhejte hain.
+function probeInfo(file) {
+    return new Promise((resolve) => {
+        execFile(
+            ffmpegPath,
+            ["-i", file],
+            { timeout: 15000 },
+            (err, stdout, stderr) => resolve(String(stderr || ""))
+        );
+    });
+}
+
+function isPlayable(info) {
+    const v = /Video: ([a-z0-9]+)/i.exec(info)?.[1]?.toLowerCase();
+    const a = /Audio: ([a-z0-9]+)/i.exec(info)?.[1]?.toLowerCase();
+    const pixOk = /yuv420p(?![0-9])/i.test(info);
+    return { ok: v === "h264" && pixOk && (!a || a === "aac"), v, a };
+}
+
+function transcodeFile(inFile, outFile) {
+    return new Promise((resolve, reject) => {
+        execFile(
+            ffmpegPath,
+            [
+                "-y",
+                "-i", inFile,
+                "-vf", "scale='min(720,iw)':-2",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-profile:v", "high",
+                "-level", "4.0",
+                "-preset", "veryfast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                outFile
+            ],
+            { timeout: 180000, maxBuffer: 1024 * 1024 * 16 },
+            (err) => (err ? reject(err) : resolve())
+        );
+    });
+}
+
+async function ensurePlayable(buf) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-"));
+    const inF = path.join(dir, "in.mp4");
+    const outF = path.join(dir, "out.mp4");
+    try {
+        fs.writeFileSync(inF, buf);
+        const p = isPlayable(await probeInfo(inF));
+        if (p.ok) {
+            console.log("[TT] format ok (h264) — direct send");
+            return buf;
+        }
+        console.log(
+            `[TT] format risky (video=${p.v || "?"} audio=${p.a || "none"}) — converting`
+        );
+        await transcodeFile(inF, outF);
+        const out = fs.readFileSync(outF);
+        return out.length ? out : buf;
+    } catch (e) {
+        console.error("[TT] playable-convert fail:", e?.message || e);
+        return buf;
+    } finally {
+        try {
+            fs.rmSync(dir, { recursive: true, force: true });
+        } catch {}
+    }
 }
 
 // Video pehle khud buffer mein download karo, phir bhejo —
@@ -257,10 +343,11 @@ async function tiktokCommand(sock, chatId, message) {
                 if (!candidate || sent) continue;
                 try {
                     const buf = await fetchBuffer(candidate);
+                    const playable = await ensurePlayable(buf);
                     await sock.sendMessage(
                         chatId,
                         {
-                            video: buf,
+                            video: playable,
                             mimetype: "video/mp4",
                             caption: "✅ *TIKTOK DOWNLOADED BY SALMAN KHAN*"
                         },
@@ -268,7 +355,7 @@ async function tiktokCommand(sock, chatId, message) {
                     );
                     sent = true;
                     console.log(
-                        `[TT] sent via buffer (${(buf.length / 1048576).toFixed(1)}MB)`
+                        `[TT] sent via buffer (${(playable.length / 1048576).toFixed(1)}MB)`
                     );
                 } catch (e) {
                     lastErr = e;
@@ -323,3 +410,4 @@ async function tiktokCommand(sock, chatId, message) {
 module.exports = tiktokCommand;
 module.exports.raceSources = raceSources;
 module.exports.extractUrl = extractUrl;
+module.exports.ensurePlayable = ensurePlayable;
