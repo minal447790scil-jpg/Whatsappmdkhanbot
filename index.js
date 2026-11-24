@@ -180,10 +180,15 @@ const DATA_FILE = './data/bot_data.json';
 fs.ensureDirSync(AUTH_DIR);
 fs.ensureDirSync('./data');
 
-let botData = { antilinkGroups: {}, totalBots: 0, registeredBots: [], statusSettings: {}, antiDelete: {}, userNames: {}, antiCall: {}, telegramUsers: [] };
+let botData = { antilinkGroups: {}, totalBots: 0, registeredBots: [], statusSettings: {}, antiDelete: {}, userNames: {}, antiCall: {}, telegramUsers: [], publicChats: [] };
 if (fs.existsSync(DATA_FILE)) {
     try { botData = fs.readJsonSync(DATA_FILE); } catch (e) {}
 }
+// PUBLIC ab per-chat hai (owner ki hidayat 2026-11-24): purana
+// global isPublic flag khatam — jis chat mein .public chale sirf
+// wahi chat public hoti hai. Purani file mein list na ho to bana do.
+if (!Array.isArray(botData.publicChats)) botData.publicChats = [];
+if ('isPublic' in botData) delete botData.isPublic;
 
 function saveBotData() {
     fs.writeJsonSync(DATA_FILE, botData);
@@ -1079,8 +1084,10 @@ const publicCommands = [
 ];
 
 if (!isBotOwner) {
-    if (!botData.isPublic) return;
+    // Sirf wahi chat public hai jahan owner ne .public chalaya tha
+    if (!Array.isArray(botData.publicChats) || !botData.publicChats.includes(from)) return;
 
+    // Public chat mein bhi owner commands sirf owner ke liye
     if (!publicCommands.includes(commandName)) {
         return await this.sock.sendMessage(from, {
             text: "*ONLY OWNER CAN USE THIS COMMAND*"
@@ -1093,16 +1100,19 @@ if (!isBotOwner) {
                             switch (commandName) {
                                 case 'public': {
                                     if (!isOwner(sender) && !msg.key.fromMe) return;
-                                    botData.isPublic = true;
+                                    if (!Array.isArray(botData.publicChats)) botData.publicChats = [];
+                                    if (!botData.publicChats.includes(from)) botData.publicChats.push(from);
                                     saveBotData();
-                                    await this.sock.sendMessage(from, { text: '✅ *Bot is now in PUBLIC mode.*' }, { quoted: msg }).catch(() => {});
+                                    await this.sock.sendMessage(from, { text: '✅ *This chat is now PUBLIC.*\nIs chat mein sab public commands chala sakte hain.\nOwner commands sirf owner ke liye hain.' }, { quoted: msg }).catch(() => {});
                                     break;
                                 }
                                 case 'private': {
                                     if (!isOwner(sender) && !msg.key.fromMe) return;
-                                    botData.isPublic = false;
+                                    if (Array.isArray(botData.publicChats)) {
+                                        botData.publicChats = botData.publicChats.filter(c => c !== from);
+                                    }
                                     saveBotData();
-                                    await this.sock.sendMessage(from, { text: '✅ *Bot is now in PRIVATE mode.*' }, { quoted: msg }).catch(() => {});
+                                    await this.sock.sendMessage(from, { text: '✅ *This chat is now PRIVATE.*\nAb is chat mein sirf owner commands chala sakta hai.' }, { quoted: msg }).catch(() => {});
                                     break;
                                 }
                                 case 'menu': {
