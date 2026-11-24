@@ -1087,11 +1087,11 @@ if (!isBotOwner) {
     // Sirf wahi chat public hai jahan owner ne .public chalaya tha
     if (!Array.isArray(botData.publicChats) || !botData.publicChats.includes(from)) return;
 
-    // Public chat mein bhi owner commands sirf owner ke liye
+    // Public chat mein bhi owner commands sirf owner ke liye —
+    // lekin koi message NAHI bhejna (owner ki hidayat 2026-11-24:
+    // "ONLY OWNER..." wala text fazool aata tha), khamoshi se ignore
     if (!publicCommands.includes(commandName)) {
-        return await this.sock.sendMessage(from, {
-            text: "*ONLY OWNER CAN USE THIS COMMAND*"
-        }, { quoted: msg });
+        return;
     }
 }
                             // Loading reaction
