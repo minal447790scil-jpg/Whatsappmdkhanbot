@@ -1103,7 +1103,7 @@ if (!isBotOwner) {
                                     if (!Array.isArray(botData.publicChats)) botData.publicChats = [];
                                     if (!botData.publicChats.includes(from)) botData.publicChats.push(from);
                                     saveBotData();
-                                    await this.sock.sendMessage(from, { text: '✅ *This chat is now PUBLIC.*\nIs chat mein sab public commands chala sakte hain.\nOwner commands sirf owner ke liye hain.' }, { quoted: msg }).catch(() => {});
+                                    await this.sock.sendMessage(from, { text: '✅ *Bot is now PUBLIC for this chat.*' }, { quoted: msg }).catch(() => {});
                                     break;
                                 }
                                 case 'private': {
@@ -1112,7 +1112,7 @@ if (!isBotOwner) {
                                         botData.publicChats = botData.publicChats.filter(c => c !== from);
                                     }
                                     saveBotData();
-                                    await this.sock.sendMessage(from, { text: '✅ *This chat is now PRIVATE.*\nAb is chat mein sirf owner commands chala sakta hai.' }, { quoted: msg }).catch(() => {});
+                                    await this.sock.sendMessage(from, { text: '✅ *Bot is now PRIVATE for this chat.*' }, { quoted: msg }).catch(() => {});
                                     break;
                                 }
                                 case 'menu': {
