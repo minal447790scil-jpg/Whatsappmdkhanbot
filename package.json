@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@raihan07/vidly": "latest",
+    "@tobyg74/tiktok-api-dl": "^1.3.7",
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "@pontalabs/ytdl": "^1.0.0",
     "axios": "^1.6.0",

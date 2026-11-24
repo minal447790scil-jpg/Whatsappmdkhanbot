@@ -1,5 +1,6 @@
 const axios = require("axios");
 const { ttdl } = require("ruhend-scraper");
+const { Downloader: tobyDownloader } = require("@tobyg74/tiktok-api-dl");
 
 // Koi source hang ho jaye to timeout — command atki na rahe
 function withTimeout(promise, ms, name) {
@@ -96,19 +97,36 @@ async function fromRuhend(url) {
     return { source: "ruhend", kind: "video", url: v };
 }
 
+// TobyG74 library (v2 = ssstik wala backend) — 2026-11-25 ki
+// raat jab siputzx/tikwm/yt-dlp SAB ek sath down thay, ye
+// wahid source tha jo chala (5s mein jawab, H.264 file mili).
+// Is liye race mein shamil hai taake ek provider ki bandish
+// poori feature band na kare.
+async function fromToby(url) {
+    const r = await tobyDownloader(url, { version: "v2" });
+    if (r?.status !== "success" || !r?.result) {
+        throw new Error("toby: fail");
+    }
+    const res = r.result;
+    if (Array.isArray(res.images) && res.images.length) {
+        return { source: "toby", kind: "images", urls: res.images.slice(0, 10) };
+    }
+    const v = res.video?.playAddr?.[0] || res.video?.downloadAddr?.[0];
+    if (!v) throw new Error("toby: no video");
+    return { source: "toby", kind: "video", url: v };
+}
+
 async function raceSources(url) {
     const t0 = Date.now();
-    // Chaar sources parallel (tikwm ke do hosts alag hain — ek
-    // down ho to doosra chal sakta hai). Serial retry HATA di:
-    // jab sab sources down hon (jaisay 2026-11-25 ki raat TikTok
-    // ki saari free APIs ek sath band theen) wo sirf 17 second
-    // aur dair karti thi, video phir bhi nahi aati thi. Ab fail
-    // bhi tez hota hai aur jo source pehle wapas aaye, race
-    // usay foran pakar leti hai.
+    // Paanch sources parallel (tikwm ke do hosts alag hain —
+    // ek down ho to doosra chal sakta hai). Serial retry nahi:
+    // jab sab down hon wo sirf dair karti thi. Jo source pehle
+    // jawab de, wahi jeet'ta hai.
     const result = await Promise.any([
         withTimeout(fromSiputzx(url), 20000, "siputzx"),
         withTimeout(fromTikwm(url), 20000, "tikwm"),
         withTimeout(fromTikwm(url, "api.tikwm.com"), 20000, "tikwm-api"),
+        withTimeout(fromToby(url), 25000, "toby"),
         withTimeout(fromRuhend(url), 20000, "ruhend")
     ]);
     result.ms = Date.now() - t0;
@@ -345,3 +363,4 @@ async function tiktokCommand(sock, chatId, message) {
 module.exports = tiktokCommand;
 module.exports.raceSources = raceSources;
 module.exports.extractUrl = extractUrl;
+module.exports.fromToby = fromToby;
